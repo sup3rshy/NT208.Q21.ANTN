@@ -1,0 +1,236 @@
+/**
+ * SocialShield Storage Module
+ * Quản lý lưu trữ dữ liệu snapshots, privacy scans, và settings
+ * Sử dụng Chrome Storage API (local)
+ */
+const SocialShieldStorage = {
+
+  // ==================== Generic Storage ====================
+
+  async get(key) {
+    const result = await chrome.storage.local.get(key);
+    return result[key];
+  },
+
+  async set(key, value) {
+    await chrome.storage.local.set({ [key]: value });
+  },
+
+  async remove(key) {
+    await chrome.storage.local.remove(key);
+  },
+
+  async getAll() {
+    return await chrome.storage.local.get(null);
+  },
+
+  // ==================== Snapshots ====================
+
+  /**
+   * Lưu snapshot danh sách following/followers
+   * @param {string} platform - 'instagram'
+   * @param {string} username - username profile được capture
+   * @param {string} type - 'following' | 'followers'
+   * @param {Array} data - mảng {username, displayName, isVerified}
+   */
+  async saveSnapshot(platform, username, type, data) {
+    const snapshot = {
+      id: `snap_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      platform,
+      username,
+      type,
+      data,
+      count: data.length,
+      timestamp: new Date().toISOString(),
+      createdAt: Date.now()
+    };
+
+    const key = this._snapshotKey(platform, username, type);
+    const existing = await this.get(key) || [];
+    existing.push(snapshot);
+    await this.set(key, existing);
+
+    // Cập nhật index
+    await this._updateSnapshotIndex(platform, username, type, snapshot.id);
+
+    return snapshot;
+  },
+
+  /**
+   * Lấy tất cả snapshots của một profile
+   */
+  async getSnapshots(platform, username, type) {
+    const key = this._snapshotKey(platform, username, type);
+    return await this.get(key) || [];
+  },
+
+  /**
+   * Lấy snapshot theo ID
+   */
+  async getSnapshotById(snapshotId) {
+    const index = await this.get('snapshot_index') || {};
+    for (const key of Object.keys(index)) {
+      const snapshots = await this.get(key) || [];
+      const found = snapshots.find(s => s.id === snapshotId);
+      if (found) return found;
+    }
+    return null;
+  },
+
+  /**
+   * Xóa snapshot theo ID
+   */
+  async deleteSnapshot(platform, username, type, snapshotId) {
+    const key = this._snapshotKey(platform, username, type);
+    const snapshots = await this.get(key) || [];
+    const filtered = snapshots.filter(s => s.id !== snapshotId);
+    await this.set(key, filtered);
+  },
+
+  /**
+   * Lấy tất cả snapshot keys (để liệt kê)
+   */
+  async getAllSnapshotGroups() {
+    const index = await this.get('snapshot_index') || {};
+    const groups = [];
+    for (const [key, info] of Object.entries(index)) {
+      const snapshots = await this.get(key) || [];
+      groups.push({
+        key,
+        ...info,
+        snapshotCount: snapshots.length,
+        latestSnapshot: snapshots[snapshots.length - 1] || null
+      });
+    }
+    return groups;
+  },
+
+  // ==================== Privacy Scans ====================
+
+  async savePrivacyScan(platform, username, results) {
+    const scan = {
+      id: `scan_${Date.now()}`,
+      platform,
+      username,
+      results,
+      riskScore: this._calculateRiskScore(results),
+      timestamp: new Date().toISOString(),
+      createdAt: Date.now()
+    };
+
+    const key = `privacy_${platform}_${username}`;
+    const existing = await this.get(key) || [];
+    existing.push(scan);
+    await this.set(key, existing);
+    return scan;
+  },
+
+  async getPrivacyScans(platform, username) {
+    const key = `privacy_${platform}_${username}`;
+    return await this.get(key) || [];
+  },
+
+  // ==================== Alerts ====================
+
+  async saveAlert(alert) {
+    const alerts = await this.get('alerts') || [];
+    alerts.unshift({
+      ...alert,
+      id: `alert_${Date.now()}`,
+      read: false,
+      timestamp: new Date().toISOString()
+    });
+    // Giữ tối đa 100 alerts
+    if (alerts.length > 100) alerts.length = 100;
+    await this.set('alerts', alerts);
+  },
+
+  async getAlerts(limit = 50) {
+    const alerts = await this.get('alerts') || [];
+    return alerts.slice(0, limit);
+  },
+
+  async markAlertRead(alertId) {
+    const alerts = await this.get('alerts') || [];
+    const alert = alerts.find(a => a.id === alertId);
+    if (alert) {
+      alert.read = true;
+      await this.set('alerts', alerts);
+    }
+  },
+
+  async getUnreadAlertCount() {
+    const alerts = await this.get('alerts') || [];
+    return alerts.filter(a => !a.read).length;
+  },
+
+  // ==================== Settings ====================
+
+  async getSettings() {
+    return await this.get('settings') || {
+      autoCapture: false,
+      captureInterval: 24, // hours
+      notifications: true,
+      suspiciousThreshold: {
+        massFollow: 20,
+        massUnfollow: 10,
+        changeRate: 30
+      }
+    };
+  },
+
+  async saveSettings(settings) {
+    await this.set('settings', settings);
+  },
+
+  // ==================== Stats ====================
+
+  async getStats() {
+    const all = await this.getAll();
+    const snapshotKeys = Object.keys(all).filter(k => k.startsWith('snapshots_'));
+    const privacyKeys = Object.keys(all).filter(k => k.startsWith('privacy_'));
+
+    let totalSnapshots = 0;
+    let totalProfiles = new Set();
+
+    for (const key of snapshotKeys) {
+      const snapshots = all[key] || [];
+      totalSnapshots += snapshots.length;
+      snapshots.forEach(s => totalProfiles.add(`${s.platform}_${s.username}`));
+    }
+
+    return {
+      totalSnapshots,
+      totalProfiles: totalProfiles.size,
+      totalPrivacyScans: privacyKeys.reduce((sum, k) => sum + (all[k]?.length || 0), 0),
+      totalAlerts: (all.alerts || []).length,
+      unreadAlerts: (all.alerts || []).filter(a => !a.read).length
+    };
+  },
+
+  // ==================== Private Helpers ====================
+
+  _snapshotKey(platform, username, type) {
+    return `snapshots_${platform}_${username}_${type}`;
+  },
+
+  async _updateSnapshotIndex(platform, username, type, snapshotId) {
+    const index = await this.get('snapshot_index') || {};
+    const key = this._snapshotKey(platform, username, type);
+    index[key] = { platform, username, type, lastUpdated: Date.now() };
+    await this.set('snapshot_index', index);
+  },
+
+  _calculateRiskScore(results) {
+    let score = 0;
+    for (const finding of results) {
+      switch (finding.severity) {
+        case 'critical': score += 30; break;
+        case 'high': score += 20; break;
+        case 'medium': score += 10; break;
+        case 'low': score += 5; break;
+      }
+    }
+    return Math.min(score, 100);
+  }
+};

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "SocialShield",
+  "version": "1.0.0",
+  "description": "Social Media Security & Connection Monitor - Giám sát bảo mật và theo dõi biến động kết nối trên mạng xã hội",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://www.instagram.com/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "content/instagram.js"],
+      "css": ["content/instagram.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "SocialShield"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

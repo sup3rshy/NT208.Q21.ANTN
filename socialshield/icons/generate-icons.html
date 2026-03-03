@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head><title>Generate SocialShield Icons</title></head>
+<body>
+  <h2>SocialShield Icon Generator</h2>
+  <p>Right-click each canvas and "Save image as" to save the icons.</p>
+  <div style="display: flex; gap: 20px; align-items: end;">
+    <div>
+      <p>16x16</p>
+      <canvas id="icon16" width="16" height="16"></canvas>
+    </div>
+    <div>
+      <p>48x48</p>
+      <canvas id="icon48" width="48" height="48"></canvas>
+    </div>
+    <div>
+      <p>128x128</p>
+      <canvas id="icon128" width="128" height="128"></canvas>
+    </div>
+  </div>
+  <br>
+  <button onclick="downloadAll()">Download All Icons</button>
+
+  <script>
+    function drawIcon(canvas) {
+      const ctx = canvas.getContext('2d');
+      const size = canvas.width;
+      const cx = size / 2;
+      const cy = size / 2;
+      const scale = size / 128;
+
+      // Background circle
+      ctx.fillStyle = '#1a1a2e';
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Shield shape
+      ctx.strokeStyle = '#00d4aa';
+      ctx.lineWidth = Math.max(2 * scale, 1);
+      ctx.fillStyle = 'rgba(0, 212, 170, 0.1)';
+
+      const shieldW = size * 0.5;
+      const shieldH = size * 0.6;
+      const topY = cy - shieldH * 0.4;
+
+      ctx.beginPath();
+      ctx.moveTo(cx, topY);
+      ctx.lineTo(cx + shieldW / 2, topY + shieldH * 0.2);
+      ctx.lineTo(cx + shieldW / 2, topY + shieldH * 0.55);
+      ctx.quadraticCurveTo(cx, topY + shieldH, cx, topY + shieldH);
+      ctx.quadraticCurveTo(cx, topY + shieldH, cx - shieldW / 2, topY + shieldH * 0.55);
+      ctx.lineTo(cx - shieldW / 2, topY + shieldH * 0.2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Checkmark inside shield
+      if (size >= 48) {
+        ctx.strokeStyle = '#00d4aa';
+        ctx.lineWidth = Math.max(3 * scale, 2);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(cx - size * 0.1, cy + size * 0.02);
+        ctx.lineTo(cx - size * 0.02, cy + size * 0.1);
+        ctx.lineTo(cx + size * 0.12, cy - size * 0.06);
+        ctx.stroke();
+      }
+    }
+
+    ['icon16', 'icon48', 'icon128'].forEach(id => {
+      drawIcon(document.getElementById(id));
+    });
+
+    function downloadAll() {
+      ['icon16', 'icon48', 'icon128'].forEach(id => {
+        const canvas = document.getElementById(id);
+        const link = document.createElement('a');
+        link.download = id + '.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+      });
+    }
+  </script>
+</body>
+</html>

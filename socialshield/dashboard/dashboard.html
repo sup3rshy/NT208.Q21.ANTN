@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SocialShield Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="ss-app">
+    <!-- Sidebar -->
+    <nav class="ss-sidebar">
+      <div class="ss-sidebar-header">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L3 7V17L12 22L21 17V7L12 2Z" stroke="#00d4aa" stroke-width="2" fill="none"/>
+          <path d="M12 8V12M12 16H12.01" stroke="#00d4aa" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="ss-sidebar-title">SocialShield</span>
+      </div>
+
+      <div class="ss-nav-links">
+        <a class="ss-nav-item active" data-page="overview" href="#">
+          <span class="ss-nav-icon">🏠</span>
+          <span>Overview</span>
+        </a>
+        <a class="ss-nav-item" data-page="snapshots" href="#">
+          <span class="ss-nav-icon">📸</span>
+          <span>Snapshots</span>
+        </a>
+        <a class="ss-nav-item" data-page="compare" href="#">
+          <span class="ss-nav-icon">🔄</span>
+          <span>Compare</span>
+        </a>
+        <a class="ss-nav-item" data-page="privacy" href="#">
+          <span class="ss-nav-icon">🔍</span>
+          <span>Privacy Scans</span>
+        </a>
+        <a class="ss-nav-item" data-page="alerts" href="#">
+          <span class="ss-nav-icon">🔔</span>
+          <span>Alerts</span>
+          <span class="ss-nav-badge" id="nav-alert-count" style="display:none">0</span>
+        </a>
+        <a class="ss-nav-item" data-page="settings" href="#">
+          <span class="ss-nav-icon">⚙️</span>
+          <span>Settings</span>
+        </a>
+      </div>
+
+      <div class="ss-sidebar-footer">
+        <div class="ss-version">v1.0.0</div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="ss-main">
+      <!-- Overview Page -->
+      <div class="ss-page active" id="page-overview">
+        <div class="ss-page-header">
+          <h1>Overview</h1>
+          <p class="ss-page-desc">Security & Connection monitoring dashboard</p>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="ss-stats-grid">
+          <div class="ss-stat-card">
+            <div class="ss-stat-card-icon">📸</div>
+            <div class="ss-stat-card-info">
+              <div class="ss-stat-card-value" id="ov-snapshots">0</div>
+              <div class="ss-stat-card-label">Total Snapshots</div>
+            </div>
+          </div>
+          <div class="ss-stat-card">
+            <div class="ss-stat-card-icon">👥</div>
+            <div class="ss-stat-card-info">
+              <div class="ss-stat-card-value" id="ov-profiles">0</div>
+              <div class="ss-stat-card-label">Profiles Tracked</div>
+            </div>
+          </div>
+          <div class="ss-stat-card">
+            <div class="ss-stat-card-icon">🔍</div>
+            <div class="ss-stat-card-info">
+              <div class="ss-stat-card-value" id="ov-scans">0</div>
+              <div class="ss-stat-card-label">Privacy Scans</div>
+            </div>
+          </div>
+          <div class="ss-stat-card ss-stat-card-alert">
+            <div class="ss-stat-card-icon">⚠️</div>
+            <div class="ss-stat-card-info">
+              <div class="ss-stat-card-value" id="ov-alerts">0</div>
+              <div class="ss-stat-card-label">Active Alerts</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Recent Activity</h2>
+          </div>
+          <div class="ss-card-body" id="ov-activity">
+            <div class="ss-empty-state">
+              <div class="ss-empty-icon">🛡️</div>
+              <p>No activity yet. Navigate to Instagram and capture your first snapshot!</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snapshots Page -->
+      <div class="ss-page" id="page-snapshots">
+        <div class="ss-page-header">
+          <h1>Snapshots</h1>
+          <p class="ss-page-desc">View and manage captured connection snapshots</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Saved Snapshots</h2>
+            <button class="ss-btn ss-btn-danger ss-btn-sm" id="btn-clear-snapshots">Clear All</button>
+          </div>
+          <div class="ss-card-body" id="snapshot-list">
+            <div class="ss-empty-state">
+              <div class="ss-empty-icon">📸</div>
+              <p>No snapshots yet.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Snapshot Detail Modal -->
+        <div class="ss-modal" id="snapshot-detail-modal" style="display:none">
+          <div class="ss-modal-overlay"></div>
+          <div class="ss-modal-content">
+            <div class="ss-modal-header">
+              <h2 id="modal-snapshot-title">Snapshot Detail</h2>
+              <button class="ss-modal-close" id="modal-close">✕</button>
+            </div>
+            <div class="ss-modal-body" id="modal-snapshot-body"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Compare Page -->
+      <div class="ss-page" id="page-compare">
+        <div class="ss-page-header">
+          <h1>Compare Snapshots</h1>
+          <p class="ss-page-desc">Compare two snapshots to see changes over time</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Select Snapshots</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-compare-selectors">
+              <div class="ss-compare-select">
+                <label>Older Snapshot</label>
+                <select id="compare-old" class="ss-select">
+                  <option value="">Select snapshot...</option>
+                </select>
+              </div>
+              <div class="ss-compare-arrow">→</div>
+              <div class="ss-compare-select">
+                <label>Newer Snapshot</label>
+                <select id="compare-new" class="ss-select">
+                  <option value="">Select snapshot...</option>
+                </select>
+              </div>
+            </div>
+            <button class="ss-btn ss-btn-primary" id="btn-compare" disabled>Compare</button>
+          </div>
+        </div>
+
+        <!-- Diff Results -->
+        <div class="ss-card" id="diff-results" style="display:none">
+          <div class="ss-card-header">
+            <h2>Comparison Results</h2>
+          </div>
+          <div class="ss-card-body" id="diff-content"></div>
+        </div>
+      </div>
+
+      <!-- Privacy Page -->
+      <div class="ss-page" id="page-privacy">
+        <div class="ss-page-header">
+          <h1>Privacy Scans</h1>
+          <p class="ss-page-desc">Review privacy scan results and recommendations</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-body" id="privacy-list">
+            <div class="ss-empty-state">
+              <div class="ss-empty-icon">🔍</div>
+              <p>No privacy scans yet. Run a scan on an Instagram profile.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Alerts Page -->
+      <div class="ss-page" id="page-alerts">
+        <div class="ss-page-header">
+          <h1>Alerts</h1>
+          <p class="ss-page-desc">Suspicious activity alerts and notifications</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>All Alerts</h2>
+            <button class="ss-btn ss-btn-sm" id="btn-mark-all-read">Mark All Read</button>
+          </div>
+          <div class="ss-card-body" id="alert-list">
+            <div class="ss-empty-state">
+              <div class="ss-empty-icon">🔔</div>
+              <p>No alerts yet. Alerts will appear when suspicious activity is detected.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Page -->
+      <div class="ss-page" id="page-settings">
+        <div class="ss-page-header">
+          <h1>Settings</h1>
+          <p class="ss-page-desc">Configure SocialShield preferences</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Detection Thresholds</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Mass Follow Threshold</div>
+                <div class="ss-setting-desc">Alert when this many new followers are detected</div>
+              </div>
+              <input type="number" class="ss-input" id="setting-mass-follow" value="20" min="5" max="100">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Mass Unfollow Threshold</div>
+                <div class="ss-setting-desc">Alert when this many unfollows are detected</div>
+              </div>
+              <input type="number" class="ss-input" id="setting-mass-unfollow" value="10" min="3" max="100">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Change Rate Threshold (%)</div>
+                <div class="ss-setting-desc">Alert when change rate exceeds this percentage</div>
+              </div>
+              <input type="number" class="ss-input" id="setting-change-rate" value="30" min="10" max="100">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Notifications</div>
+                <div class="ss-setting-desc">Show browser notifications for alerts</div>
+              </div>
+              <label class="ss-toggle">
+                <input type="checkbox" id="setting-notifications" checked>
+                <span class="ss-toggle-slider"></span>
+              </label>
+            </div>
+            <button class="ss-btn ss-btn-primary" id="btn-save-settings">Save Settings</button>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Data Management</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Export Data</div>
+                <div class="ss-setting-desc">Download all data as JSON file</div>
+              </div>
+              <button class="ss-btn ss-btn-sm" id="btn-export">Export</button>
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Clear All Data</div>
+                <div class="ss-setting-desc">Permanently delete all snapshots, scans, and alerts</div>
+              </div>
+              <button class="ss-btn ss-btn-danger ss-btn-sm" id="btn-clear-all">Clear All</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="../lib/storage.js"></script>
+  <script src="../lib/diff.js"></script>
+  <script src="../lib/scanner.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

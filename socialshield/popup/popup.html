@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SocialShield</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="ss-popup">
+    <!-- Header -->
+    <div class="ss-header">
+      <div class="ss-logo">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L3 7V17L12 22L21 17V7L12 2Z" stroke="#00d4aa" stroke-width="2" fill="none"/>
+          <path d="M12 8V12M12 16H12.01" stroke="#00d4aa" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <div class="ss-title">SocialShield</div>
+          <div class="ss-subtitle">Security & Connection Monitor</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="ss-status" id="ss-status">
+      <div class="ss-status-dot ss-dot-inactive"></div>
+      <span id="ss-status-text">Checking page...</span>
+    </div>
+
+    <!-- Profile Info (shown on Instagram profile pages) -->
+    <div class="ss-profile-section" id="ss-profile-section" style="display:none;">
+      <div class="ss-profile-name">
+        <span id="ss-profile-username">@username</span>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="ss-actions" id="ss-actions">
+      <button class="ss-action-btn" id="btn-capture-following" disabled>
+        <span class="ss-action-icon">📸</span>
+        <div class="ss-action-info">
+          <div class="ss-action-title">Capture Following</div>
+          <div class="ss-action-desc">Snapshot following list</div>
+        </div>
+      </button>
+
+      <button class="ss-action-btn" id="btn-capture-followers" disabled>
+        <span class="ss-action-icon">📸</span>
+        <div class="ss-action-info">
+          <div class="ss-action-title">Capture Followers</div>
+          <div class="ss-action-desc">Snapshot followers list</div>
+        </div>
+      </button>
+
+      <button class="ss-action-btn" id="btn-privacy-scan" disabled>
+        <span class="ss-action-icon">🔍</span>
+        <div class="ss-action-info">
+          <div class="ss-action-title">Privacy Scan</div>
+          <div class="ss-action-desc">Check for exposed PII</div>
+        </div>
+      </button>
+
+      <button class="ss-action-btn" id="btn-link-scan" disabled>
+        <span class="ss-action-icon">🔗</span>
+        <div class="ss-action-info">
+          <div class="ss-action-title">Link Scanner</div>
+          <div class="ss-action-desc">Check links for threats</div>
+        </div>
+      </button>
+    </div>
+
+    <!-- Stats Summary -->
+    <div class="ss-stats" id="ss-stats">
+      <div class="ss-stat-item">
+        <div class="ss-stat-value" id="stat-snapshots">0</div>
+        <div class="ss-stat-label">Snapshots</div>
+      </div>
+      <div class="ss-stat-item">
+        <div class="ss-stat-value" id="stat-profiles">0</div>
+        <div class="ss-stat-label">Profiles</div>
+      </div>
+      <div class="ss-stat-item">
+        <div class="ss-stat-value" id="stat-alerts">0</div>
+        <div class="ss-stat-label">Alerts</div>
+      </div>
+    </div>
+
+    <!-- Recent Alerts -->
+    <div class="ss-recent" id="ss-recent" style="display:none;">
+      <div class="ss-section-title">Recent Alerts</div>
+      <div id="ss-alert-list"></div>
+    </div>
+
+    <!-- Footer -->
+    <div class="ss-footer">
+      <button class="ss-dashboard-btn" id="btn-dashboard">
+        Open Dashboard
+        <span>→</span>
+      </button>
+    </div>
+  </div>
+
+  <script src="../lib/storage.js"></script>
+  <script src="../lib/diff.js"></script>
+  <script src="../lib/scanner.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
