@@ -151,18 +151,24 @@
             <h2>Select Snapshots</h2>
           </div>
           <div class="ss-card-body">
+            <div class="ss-compare-profile-select" style="margin-bottom: 16px;">
+              <label>Profile</label>
+              <select id="compare-profile" class="ss-select">
+                <option value="">Select profile first...</option>
+              </select>
+            </div>
             <div class="ss-compare-selectors">
               <div class="ss-compare-select">
                 <label>Older Snapshot</label>
-                <select id="compare-old" class="ss-select">
-                  <option value="">Select snapshot...</option>
+                <select id="compare-old" class="ss-select" disabled>
+                  <option value="">Select profile first...</option>
                 </select>
               </div>
               <div class="ss-compare-arrow">→</div>
               <div class="ss-compare-select">
                 <label>Newer Snapshot</label>
-                <select id="compare-new" class="ss-select">
-                  <option value="">Select snapshot...</option>
+                <select id="compare-new" class="ss-select" disabled>
+                  <option value="">Select profile first...</option>
                 </select>
               </div>
             </div>

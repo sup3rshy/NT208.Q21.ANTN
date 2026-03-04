@@ -99,10 +99,11 @@
       }
 
       for (const alert of alerts) {
+        const profileTag = alert.username ? `[@${alert.username}] ` : '';
         activities.push({
           type: 'alert',
           icon: '⚠️',
-          message: alert.message || alert.title,
+          message: `${profileTag}${alert.message || alert.title}`,
           timestamp: alert.timestamp,
           severity: alert.severity
         });
@@ -244,44 +245,94 @@
 
     async loadCompareSelectors() {
       const groups = await SocialShieldStorage.getAllSnapshotGroups();
+      const profileSelect = document.getElementById('compare-profile');
       const oldSelect = document.getElementById('compare-old');
       const newSelect = document.getElementById('compare-new');
 
-      // Clear existing options
-      oldSelect.innerHTML = '<option value="">Select snapshot...</option>';
-      newSelect.innerHTML = '<option value="">Select snapshot...</option>';
+      // Reset tất cả
+      profileSelect.innerHTML = '<option value="">Select profile first...</option>';
+      oldSelect.innerHTML = '<option value="">Select profile first...</option>';
+      newSelect.innerHTML = '<option value="">Select profile first...</option>';
+      oldSelect.disabled = true;
+      newSelect.disabled = true;
+      document.getElementById('btn-compare').disabled = true;
 
+      // Cache tất cả snapshots
       for (const group of groups) {
         const snapshots = await SocialShieldStorage.getSnapshots(group.platform, group.username, group.type);
         this.snapshotCache[group.key] = snapshots;
-
-        for (const snap of snapshots) {
-          const label = `@${snap.username} - ${snap.type} (${snap.count}) - ${this.formatDate(snap.timestamp)}`;
-          const optOld = new Option(label, `${group.key}|${snap.id}`);
-          const optNew = new Option(label, `${group.key}|${snap.id}`);
-          oldSelect.add(optOld);
-          newSelect.add(optNew);
-        }
       }
 
-      // Enable compare button when both are selected
+      // Populate profile selector - chỉ hiện profile có >= 2 snapshots (mới compare được)
+      const validGroups = groups.filter(g => (this.snapshotCache[g.key]?.length || 0) >= 2);
+
+      if (validGroups.length === 0) {
+        profileSelect.innerHTML = '<option value="">No profiles with 2+ snapshots...</option>';
+        return;
+      }
+
+      for (const group of validGroups) {
+        const count = this.snapshotCache[group.key]?.length || 0;
+        const label = `@${group.username} - ${group.type} (${count} snapshots)`;
+        profileSelect.add(new Option(label, group.key));
+      }
+
+      // Clone + replace để xóa event listeners cũ (tránh stack khi navigate lại)
+      const newProfileSelect = profileSelect.cloneNode(true);
+      profileSelect.parentNode.replaceChild(newProfileSelect, profileSelect);
+      const newOldSelect = oldSelect.cloneNode(true);
+      oldSelect.parentNode.replaceChild(newOldSelect, oldSelect);
+      const newNewSelect = newSelect.cloneNode(true);
+      newSelect.parentNode.replaceChild(newNewSelect, newSelect);
+
+      // Khi chọn profile → populate old/new dropdowns với snapshot cùng profile
+      newProfileSelect.addEventListener('change', () => {
+        const selectedKey = newProfileSelect.value;
+        newOldSelect.innerHTML = '<option value="">Select older snapshot...</option>';
+        newNewSelect.innerHTML = '<option value="">Select newer snapshot...</option>';
+        document.getElementById('btn-compare').disabled = true;
+        document.getElementById('diff-results').style.display = 'none';
+
+        if (!selectedKey) {
+          newOldSelect.disabled = true;
+          newNewSelect.disabled = true;
+          return;
+        }
+
+        const snapshots = this.snapshotCache[selectedKey] || [];
+        newOldSelect.disabled = false;
+        newNewSelect.disabled = false;
+
+        for (const snap of snapshots) {
+          const label = `${snap.count} ${snap.type} - ${this.formatDate(snap.timestamp)}`;
+          newOldSelect.add(new Option(label, snap.id));
+          newNewSelect.add(new Option(label, snap.id));
+        }
+      });
+
+      // Enable compare button khi cả 2 đều đã chọn + khác nhau
       const updateBtn = () => {
-        document.getElementById('btn-compare').disabled = !(oldSelect.value && newSelect.value);
+        const canCompare = newOldSelect.value && newNewSelect.value && newOldSelect.value !== newNewSelect.value;
+        document.getElementById('btn-compare').disabled = !canCompare;
       };
-      oldSelect.addEventListener('change', updateBtn);
-      newSelect.addEventListener('change', updateBtn);
+      newOldSelect.addEventListener('change', updateBtn);
+      newNewSelect.addEventListener('change', updateBtn);
     },
 
     async runCompare() {
-      const oldVal = document.getElementById('compare-old').value;
-      const newVal = document.getElementById('compare-new').value;
-      if (!oldVal || !newVal) return;
+      const profileKey = document.getElementById('compare-profile').value;
+      const oldId = document.getElementById('compare-old').value;
+      const newId = document.getElementById('compare-new').value;
+      if (!profileKey || !oldId || !newId) return;
 
-      const [oldKey, oldId] = oldVal.split('|');
-      const [newKey, newId] = newVal.split('|');
+      if (oldId === newId) {
+        alert('Please select two different snapshots to compare.');
+        return;
+      }
 
-      const oldSnap = this.snapshotCache[oldKey]?.find(s => s.id === oldId);
-      const newSnap = this.snapshotCache[newKey]?.find(s => s.id === newId);
+      const snapshots = this.snapshotCache[profileKey] || [];
+      const oldSnap = snapshots.find(s => s.id === oldId);
+      const newSnap = snapshots.find(s => s.id === newId);
 
       if (!oldSnap || !newSnap) {
         alert('Could not find selected snapshots');
@@ -291,13 +342,25 @@
       const diff = SocialShieldDiff.compare(oldSnap, newSnap);
       const alerts = SocialShieldDiff.detectSuspicious(diff);
 
-      this.renderDiffResults(diff, alerts);
+      this.renderDiffResults(diff, alerts, oldSnap, newSnap);
     },
 
-    renderDiffResults(diff, alerts) {
+    renderDiffResults(diff, alerts, oldSnap, newSnap) {
       const container = document.getElementById('diff-results');
       const content = document.getElementById('diff-content');
       container.style.display = 'block';
+
+      // Header hiển thị profile info
+      const profileInfo = oldSnap ? `
+        <div style="text-align: center; margin-bottom: 16px; padding: 12px; background: rgba(0,212,170,0.08); border-radius: 8px;">
+          <div style="font-size: 16px; font-weight: 600; color: var(--accent);">
+            @${this.escapeHtml(oldSnap.username)}
+          </div>
+          <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
+            ${oldSnap.type} &middot; ${oldSnap.platform}
+          </div>
+        </div>
+      ` : '';
 
       let alertsHtml = '';
       if (alerts.length > 0) {
@@ -317,6 +380,7 @@
       }
 
       content.innerHTML = `
+        ${profileInfo}
         ${alertsHtml}
         <div class="ss-diff-summary">
           <div class="ss-diff-stat">
@@ -456,6 +520,14 @@
             ${alert.severity === 'danger' ? '🚨' : alert.severity === 'warning' ? '⚠️' : 'ℹ️'}
           </div>
           <div class="ss-alert-card-content">
+            ${alert.username ? `
+              <div class="ss-alert-card-profile" style="font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 2px;">
+                @${this.escapeHtml(alert.username)}
+                <span style="color: var(--text-secondary); font-weight: 400;">
+                  &middot; ${this.escapeHtml(alert.snapshotType || '')} &middot; ${this.escapeHtml(alert.platform || '')}
+                </span>
+              </div>
+            ` : ''}
             <div class="ss-alert-card-title">${this.escapeHtml(alert.title || alert.type)}</div>
             <div class="ss-alert-card-message">${this.escapeHtml(alert.message)}</div>
             <div class="ss-alert-card-time">${this.formatDate(alert.timestamp)}</div>

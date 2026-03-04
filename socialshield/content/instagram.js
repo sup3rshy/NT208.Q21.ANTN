@@ -141,43 +141,24 @@
       this.showProgress(`Capturing ${type}...`, 0);
 
       try {
-        // Thử click vào link following/followers để mở modal
-        const linkSelector = `a[href="/${profile}/${type}/"]`;
-        let link = document.querySelector(linkSelector);
-
-        // Fallback: tìm link chứa text "following" hoặc "followers"
-        if (!link) {
-          const allLinks = document.querySelectorAll(`a[href*="/${profile}/"]`);
-          link = Array.from(allLinks).find(a => a.href.includes(`/${type}`));
-        }
-
-        if (link) {
-          link.click();
-          await this.wait(2000);
-        }
-
-        // Tìm dialog
-        const modal = await this.waitForModal(5000);
-        if (!modal) {
-          this.notify(`Could not find ${type} dialog. Please open it manually and try again.`, 'error');
+        // Bước 1: Lấy User ID từ API
+        this.updateProgress('Fetching user info...');
+        const userId = await this.fetchUserId(profile);
+        if (!userId) {
+          this.notify(`Could not find user ID for @${profile}. Make sure you're logged in.`, 'error');
           this.isCapturing = false;
           this.hideProgress();
           return;
         }
+        console.log(`[SocialShield] User ID for @${profile}: ${userId}`);
 
-        // Tìm scrollable container
-        const scrollable = this.findScrollable(modal);
-        if (!scrollable) {
-          this.notify('Could not find scrollable list in dialog.', 'error');
-          this.isCapturing = false;
-          this.hideProgress();
-          return;
-        }
+        // Bước 2: Fetch following/followers qua API (có pagination)
+        this.updateProgress(`Fetching ${type} via API...`);
+        const users = await this.fetchConnectionsAPI(userId, type);
 
-        // Bắt đầu scroll và thu thập
-        await this.scrollAndCollect(scrollable, modal);
+        this.capturedUsers = users;
 
-        // Lưu snapshot
+        // Bước 3: Lưu snapshot
         if (this.capturedUsers.length > 0) {
           const snapshot = await SocialShieldStorage.saveSnapshot(
             'instagram',
@@ -191,16 +172,14 @@
             'success'
           );
 
-          // Thông báo cho background
           chrome.runtime.sendMessage({
             type: 'SNAPSHOT_SAVED',
             data: snapshot
           });
 
-          // Tự động detect suspicious activity nếu có snapshot cũ
           await this.autoCompare(profile, type, snapshot);
         } else {
-          this.notify('No users captured. The list might be empty or the page structure changed.', 'warning');
+          this.notify('No users captured. The list might be empty or private.', 'warning');
         }
 
       } catch (err) {
@@ -212,259 +191,128 @@
       }
     },
 
-    async waitForModal(timeout = 5000) {
-      const start = Date.now();
-      while (Date.now() - start < timeout) {
-        const modal = document.querySelector('div[role="dialog"]');
-        if (modal) return modal;
-        await this.wait(300);
-      }
-      return null;
+    // ==================== Instagram API Methods ====================
+
+    /**
+     * Lấy CSRF token từ cookie (cần cho API requests)
+     */
+    getCsrfToken() {
+      const match = document.cookie.match(/csrftoken=([^;]+)/);
+      return match ? match[1] : '';
     },
 
-    findScrollable(modal) {
-      // Chiến lược 1: tìm div có overflow scroll/auto
-      const allDivs = modal.querySelectorAll('div');
-      for (const div of allDivs) {
-        const style = window.getComputedStyle(div);
-        if (
-          (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-          div.scrollHeight > div.clientHeight + 10
-        ) {
-          return div;
-        }
-      }
-
-      // Chiến lược 2: tìm div lớn nhất bên trong modal
-      let largest = null;
-      let maxHeight = 0;
-      for (const div of allDivs) {
-        if (div.scrollHeight > maxHeight && div.children.length > 3) {
-          maxHeight = div.scrollHeight;
-          largest = div;
-        }
-      }
-      return largest;
-    },
-
-    async scrollAndCollect(scrollable, modal) {
-      let previousCount = 0;
-      let noChangeRounds = 0;
-      const maxNoChange = 5;
-      let scrollAttempts = 0;
-      const maxScrollAttempts = 500; // Safety limit
-      let reachedSuggested = false;
-
-      while (noChangeRounds < maxNoChange && scrollAttempts < maxScrollAttempts) {
-        // Thu thập users hiện tại
-        this.collectUsers(modal);
-
-        // Kiểm tra đã đến phần "Suggested for you" chưa
-        if (!reachedSuggested && this.findSuggestedBoundary(modal)) {
-          reachedSuggested = true;
-          // Thu thập thêm 1 lần nữa rồi dừng
-          this.collectUsers(modal);
-          this.updateProgress(
-            `Done! ${this.capturedUsers.length} users captured (reached suggested section)`,
-            null
-          );
-          break;
-        }
-
-        // Cập nhật progress
-        this.updateProgress(
-          `Capturing... ${this.capturedUsers.length} users found`,
-          null
+    /**
+     * Lấy User ID từ username qua API
+     */
+    async fetchUserId(username) {
+      try {
+        const res = await fetch(
+          `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+          {
+            headers: {
+              'x-csrftoken': this.getCsrfToken(),
+              'x-ig-app-id': '936619743392459',
+              'x-requested-with': 'XMLHttpRequest',
+            },
+            credentials: 'include',
+          }
         );
 
-        // Kiểm tra có user mới không
-        if (this.capturedUsers.length === previousCount) {
-          noChangeRounds++;
-        } else {
-          noChangeRounds = 0;
+        if (!res.ok) {
+          console.error(`[SocialShield] Failed to fetch user ID: ${res.status}`);
+          return null;
         }
-        previousCount = this.capturedUsers.length;
 
-        // Scroll xuống
-        scrollable.scrollTop += scrollable.clientHeight * 0.8;
-        scrollAttempts++;
-
-        // Random delay để tránh bị phát hiện
-        await this.wait(600 + Math.random() * 600);
+        const data = await res.json();
+        return data?.data?.user?.id || null;
+      } catch (err) {
+        console.error('[SocialShield] fetchUserId error:', err);
+        return null;
       }
     },
 
-    collectUsers(container) {
-      // Tìm ranh giới "Suggested for you" - dừng lại trước phần này
-      const suggestedBoundary = this.findSuggestedBoundary(container);
+    /**
+     * Fetch following/followers list qua Instagram API với pagination
+     */
+    async fetchConnectionsAPI(userId, type) {
+      const users = [];
+      let maxId = null;
+      let hasMore = true;
+      let page = 0;
+      const perPage = 100; // Instagram cho tối đa ~200 per request
 
-      // Tìm tất cả links có pattern /<username>/
-      const links = container.querySelectorAll('a[href]');
-      const nonUserPaths = new Set([
-        'explore', 'reels', 'direct', 'accounts', 'stories',
-        'p', 'tv', 'reel', 'tags', 'locations', 'nametag',
-        'directory', 'legal', 'about', 'press', 'api', 'jobs',
-        'privacy', 'terms', 'help'
-      ]);
+      while (hasMore && this.isCapturing) {
+        page++;
+        this.updateProgress(`Fetching ${type}... page ${page} (${users.length} users)`);
 
-      for (const link of links) {
-        const href = link.getAttribute('href');
-        if (!href) continue;
-
-        // Nếu link nằm SAU "Suggested for you" → bỏ qua
-        if (suggestedBoundary) {
-          const position = suggestedBoundary.compareDocumentPosition(link);
-          if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
-            continue; // Link nằm sau phần suggested → skip
+        try {
+          // Build URL
+          let url;
+          if (type === 'following') {
+            url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?count=${perPage}`;
+          } else {
+            url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
           }
-        }
 
-        // Match /<username>/ pattern
-        const match = href.match(/^\/([a-zA-Z0-9._]{1,30})\/$/);
-        if (!match) continue;
-
-        const username = match[1];
-        if (nonUserPaths.has(username)) continue;
-        if (this.capturedUsers.find(u => u.username === username)) continue;
-
-        // Kiểm tra thêm: bỏ qua nếu row có nút "Follow" (chưa follow = suggested)
-        // Chỉ lấy row có nút "Following" hoặc "Requested" hoặc "Remove"
-        const row = this.findUserRow(link);
-        if (row && this.isSuggestedEntry(row)) {
-          continue; // Đây là suggested user, không phải following/follower thật
-        }
-
-        // Extract thêm thông tin
-        let displayName = '';
-        let isVerified = false;
-
-        if (row) {
-          // Check verified badge trước
-          isVerified = !!row.querySelector('svg[aria-label="Verified"], [title="Verified"]');
-
-          // Tìm display name - cải thiện logic
-          displayName = this.extractDisplayName(row, username, isVerified);
-        }
-
-        this.capturedUsers.push({
-          username,
-          displayName,
-          isVerified,
-          profileUrl: `https://www.instagram.com/${username}/`
-        });
-      }
-    },
-
-    /**
-     * Tìm phần tử "Suggested for you" trong modal
-     */
-    findSuggestedBoundary(container) {
-      // Tìm text "Suggested for you" hoặc tương đương
-      const walker = document.createTreeWalker(
-        container,
-        NodeFilter.SHOW_TEXT,
-        null
-      );
-
-      while (walker.nextNode()) {
-        const text = walker.currentNode.textContent.trim().toLowerCase();
-        if (
-          text === 'suggested for you' ||
-          text === 'suggestions for you' ||
-          text === 'suggested' ||
-          text === 'gợi ý cho bạn' // Vietnamese Instagram
-        ) {
-          return walker.currentNode.parentElement;
-        }
-      }
-      return null;
-    },
-
-    /**
-     * Tìm row container chứa thông tin user
-     */
-    findUserRow(link) {
-      // Đi lên DOM tree tìm row chứa cả username + button
-      let el = link.parentElement;
-      let depth = 0;
-      while (el && depth < 6) {
-        // Row thường chứa cả link username + button Follow/Following
-        const buttons = el.querySelectorAll('button');
-        const links = el.querySelectorAll('a[href]');
-        if (buttons.length > 0 && links.length > 0) {
-          return el;
-        }
-        el = el.parentElement;
-        depth++;
-      }
-      return link.closest('div[class]') || link.parentElement;
-    },
-
-    /**
-     * Kiểm tra xem entry này là "Suggested" hay là following/follower thật
-     */
-    isSuggestedEntry(row) {
-      const buttons = row.querySelectorAll('button');
-      for (const btn of buttons) {
-        const text = btn.textContent.trim().toLowerCase();
-        // Nút "Follow" (chưa follow) = suggested entry
-        // Nút "Following", "Requested", "Remove" = real entry
-        if (text === 'follow') {
-          // Kiểm tra thêm: nếu có text "Suggested for you" trong row
-          const rowText = row.textContent.toLowerCase();
-          if (rowText.includes('suggested for you') || rowText.includes('gợi ý cho bạn')) {
-            return true;
+          if (maxId) {
+            url += `&max_id=${maxId}`;
           }
-          // Nút "Follow" đơn thuần có thể là follower chưa follow lại
-          // Chỉ đánh dấu suggested nếu KHÔNG có "Remove" button
-          const hasRemove = Array.from(buttons).some(b =>
-            b.textContent.trim().toLowerCase() === 'remove'
-          );
-          if (!hasRemove && rowText.includes('suggested')) {
-            return true;
+
+          const res = await fetch(url, {
+            headers: {
+              'x-csrftoken': this.getCsrfToken(),
+              'x-ig-app-id': '936619743392459',
+              'x-requested-with': 'XMLHttpRequest',
+            },
+            credentials: 'include',
+          });
+
+          if (!res.ok) {
+            console.error(`[SocialShield] API error: ${res.status}`);
+            if (res.status === 401 || res.status === 403) {
+              this.notify('Authentication error. Please make sure you are logged into Instagram.', 'error');
+            }
+            break;
           }
+
+          const data = await res.json();
+
+          if (data.users && data.users.length > 0) {
+            for (const u of data.users) {
+              // Tránh duplicate
+              if (users.find(existing => existing.username === u.username)) continue;
+
+              users.push({
+                username: u.username,
+                displayName: u.full_name || '',
+                isVerified: u.is_verified || false,
+                profileUrl: `https://www.instagram.com/${u.username}/`,
+                profilePic: u.profile_pic_url || '',
+                userId: u.pk || u.pk_id || '',
+              });
+            }
+          }
+
+          // Pagination: kiểm tra next_max_id
+          if (data.next_max_id) {
+            maxId = data.next_max_id;
+          } else {
+            hasMore = false;
+          }
+
+          // Delay giữa các requests để tránh rate limit
+          if (hasMore) {
+            await this.wait(800 + Math.random() * 400);
+          }
+
+        } catch (err) {
+          console.error(`[SocialShield] fetchConnectionsAPI error on page ${page}:`, err);
+          break;
         }
       }
-      return false;
-    },
 
-    /**
-     * Extract display name chính xác hơn
-     */
-    extractDisplayName(row, username, isVerified) {
-      // Tìm tất cả span elements
-      const spans = row.querySelectorAll('span');
-      const skipTexts = new Set([
-        'follow', 'following', 'requested', 'remove',
-        'verified', 'suggested for you', 'close friends',
-        username, // Bỏ qua username
-        '' // Bỏ qua empty
-      ]);
-
-      for (const span of spans) {
-        // Chỉ lấy span lá (không chứa child elements phức tạp)
-        if (span.querySelector('a, button, svg, img')) continue;
-
-        const text = span.textContent.trim();
-        const textLower = text.toLowerCase();
-
-        // Bỏ qua nếu text trùng username hoặc là button text
-        if (skipTexts.has(textLower)) continue;
-        if (text.length === 0 || text.length > 60) continue;
-
-        // Bỏ qua nếu text chứa username (e.g., "usernameVerified")
-        if (textLower.includes(username.toLowerCase()) && text.length > username.length) continue;
-
-        // Bỏ qua nếu chỉ là "Verified" text
-        if (textLower === 'verified') continue;
-
-        // Bỏ qua nếu text là số (e.g., follower count)
-        if (/^\d+[,.\d]*[KkMm]?$/.test(text)) continue;
-
-        // Đây có khả năng là display name
-        return text;
-      }
-      return '';
+      console.log(`[SocialShield] Total ${type} fetched: ${users.length}`);
+      return users;
     },
 
     async autoCompare(profile, type, newSnapshot) {
