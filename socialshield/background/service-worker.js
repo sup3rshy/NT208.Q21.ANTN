@@ -174,8 +174,26 @@ const InstagramAPI = {
             },
           });
 
+          // Phát hiện redirect đến login/challenge page
+          if (res.redirected) {
+            console.warn(`[SocialShield BG] Redirected to: ${res.url}`);
+            if (res.url.includes('/accounts/login') || res.url.includes('/challenge')) {
+              console.error('[SocialShield BG] Session expired - redirected to login');
+              hasMore = false;
+              break;
+            }
+          }
+
           if (!res.ok) {
             console.error(`[SocialShield BG] API error: ${res.status}`);
+            break;
+          }
+
+          // Kiểm tra response có phải JSON không
+          const contentType = res.headers.get('content-type');
+          if (!contentType || !contentType.includes('json')) {
+            console.error(`[SocialShield BG] Unexpected response type: ${contentType}`);
+            hasMore = false;
             break;
           }
 
@@ -201,24 +219,6 @@ const InstagramAPI = {
           }
 
           if (isFollowers) {
-            // Bắt chước native: POST show_many sau mỗi page followers
-            if (pageUserIds.length > 0) {
-              try {
-                await fetch('https://www.instagram.com/api/v1/friendships/show_many/', {
-                  method: 'POST',
-                  headers: {
-                    'x-csrftoken': csrfToken,
-                    'x-ig-app-id': '936619743392459',
-                    'x-requested-with': 'XMLHttpRequest',
-                    'content-type': 'application/x-www-form-urlencoded',
-                    'Cookie': cookieHeader,
-                  },
-                  body: `user_ids=${pageUserIds.join(',')}`,
-                });
-              } catch (e) {
-                // show_many fail không ảnh hưởng data
-              }
-            }
             offset += returnedCount;
             if (returnedCount < perPage) {
               hasMore = false;

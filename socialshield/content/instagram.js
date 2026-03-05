@@ -332,6 +332,9 @@
       const MAX_ATTEMPTS = 5;
       // Map username → user object để merge kết quả giữa các attempts
       const userMap = new Map();
+      const isFollowers = type === 'followers';
+      // rank_token cho following (UUID, giữ qua các pages)
+      const rankToken = !isFollowers ? crypto.randomUUID() : null;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
@@ -339,14 +342,10 @@
           await this.wait(1500 + Math.random() * 500);
         }
 
-        let maxId = null;
+        // Cả followers và following đều dùng cursor-based pagination (next_max_id từ response)
+        let nextMaxId = null;
         let hasMore = true;
         let page = 0;
-        // Following dùng cursor (next_max_id từ response)
-        // Followers: bắt chước native IG behavior: count=12, offset cộng dồn, POST show_many sau mỗi page
-        const isFollowers = type === 'followers';
-        const perPage = isFollowers ? 12 : 200;
-        let offset = 0;
 
         while (hasMore && this.isCapturing) {
           page++;
@@ -359,15 +358,14 @@
           try {
             let url;
             if (isFollowers) {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
-              if (offset > 0) {
-                url += `&max_id=${offset}`;
-              }
+              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?search_surface=follow_list_page`;
             } else {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?count=${perPage}`;
-              if (maxId) {
-                url += `&max_id=${maxId}`;
-              }
+              url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?includes_hashtags=true&rank_token=${rankToken}`;
+            }
+            // Params chung theo instagram-private-api
+            url += `&order=default&query=&enable_groups=true`;
+            if (nextMaxId) {
+              url += `&max_id=${nextMaxId}`;
             }
 
             const res = await fetch(url, {
@@ -379,6 +377,16 @@
               credentials: 'include',
             });
 
+            // Phát hiện redirect đến login/challenge page
+            if (res.redirected) {
+              console.warn(`[SocialShield] Redirected to: ${res.url}`);
+              if (res.url.includes('/accounts/login') || res.url.includes('/challenge')) {
+                this.notify('Session expired. Please refresh the page and try again.', 'error');
+                hasMore = false;
+                break;
+              }
+            }
+
             if (!res.ok) {
               console.error(`[SocialShield] API error: ${res.status}`);
               if (res.status === 401 || res.status === 403) {
@@ -387,11 +395,18 @@
               break;
             }
 
-            const data = await res.json();
-            const returnedCount = data.users ? data.users.length : 0;
-            const pageUserIds = [];
+            // Kiểm tra response có phải JSON không (tránh parse HTML từ redirect)
+            const contentType = res.headers.get('content-type');
+            if (!contentType || !contentType.includes('json')) {
+              console.error(`[SocialShield] Unexpected response type: ${contentType}`);
+              this.notify('Instagram returned unexpected response. Please refresh and try again.', 'error');
+              hasMore = false;
+              break;
+            }
 
-            if (data.users && returnedCount > 0) {
+            const data = await res.json();
+
+            if (data.users && data.users.length > 0) {
               for (const u of data.users) {
                 const key = (u.username || '').toLowerCase();
                 if (!userMap.has(key)) {
@@ -404,39 +419,14 @@
                     userId: u.pk || u.pk_id || '',
                   });
                 }
-                pageUserIds.push(String(u.pk || u.pk_id || ''));
               }
             }
 
-            if (isFollowers) {
-              // Bắt chước native: POST show_many sau mỗi page followers
-              if (pageUserIds.length > 0) {
-                try {
-                  await fetch('https://www.instagram.com/api/v1/friendships/show_many/', {
-                    method: 'POST',
-                    headers: {
-                      'x-csrftoken': this.getCsrfToken(),
-                      'x-ig-app-id': '936619743392459',
-                      'x-requested-with': 'XMLHttpRequest',
-                      'content-type': 'application/x-www-form-urlencoded',
-                    },
-                    credentials: 'include',
-                    body: `user_ids=${pageUserIds.join(',')}&jazoest=${this.getJazoest()}`,
-                  });
-                } catch (e) {
-                  // show_many fail không ảnh hưởng data, bỏ qua
-                }
-              }
-              offset += returnedCount;
-              if (returnedCount < perPage) {
-                hasMore = false;
-              }
+            // Cả 2 endpoint đều dùng cursor: next_max_id từ response
+            if (data.next_max_id) {
+              nextMaxId = data.next_max_id;
             } else {
-              if (data.next_max_id) {
-                maxId = data.next_max_id;
-              } else {
-                hasMore = false;
-              }
+              hasMore = false;
             }
 
             if (hasMore) {
