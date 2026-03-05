@@ -65,7 +65,8 @@
 | Lợi thế | Mô tả |
 |---------|--------|
 | **Browser Extension** | Hoạt động trực tiếp trên trang IG, không cần chuyển app/tab |
-| **Không yêu cầu đăng nhập** | KHÔNG thu thập credentials - chỉ đọc DOM hiện tại |
+| **Sử dụng Instagram API** | Gọi trực tiếp Instagram Private API để lấy dữ liệu chính xác, không scrape DOM |
+| **Auto Capture** | Tự động capture snapshots theo lịch (background), không cần mở Instagram |
 | **Tích hợp Security** | Kết hợp connection tracking + privacy scanning + link checking |
 | **Hoàn toàn miễn phí** | Open source, không subscription |
 | **Dữ liệu local** | Dữ liệu lưu trên máy user, không upload lên server bên thứ 3 |
@@ -95,10 +96,11 @@
 │  │  Content Script  │   │  Background SW   │   │  Popup UI    │  │
 │  │  (instagram.js)  │◄─►│ (service-worker) │◄─►│ (popup.html) │  │
 │  │                  │   │                  │   │              │  │
-│  │ - DOM Scraping   │   │ - Message Hub    │   │ - Quick View │  │
-│  │ - UI Injection   │   │ - Notifications  │   │ - Actions    │  │
-│  │ - Privacy Scan   │   │ - Alarms         │   │ - Stats      │  │
-│  │ - Link Check     │   │                  │   │              │  │
+│  │ - IG API Calls   │   │ - IG API (BG)   │   │ - Quick View │  │
+│  │ - UI Injection   │   │ - Auto Capture   │   │ - Actions    │  │
+│  │ - Privacy Scan   │   │ - Notifications  │   │ - Stats      │  │
+│  │ - Link Check     │   │ - Alarms         │   │              │  │
+│  │ - Context Check  │   │ - Cookies API    │   │              │  │
 │  └────────┬─────────┘   └────────┬─────────┘   └──────┬───────┘  │
 │           │                      │                      │         │
 │           └──────────┬───────────┘                      │         │
@@ -122,17 +124,19 @@
 └──────────────────────────────────────────────────────────────────┘
 
                     Tương tác với bên ngoài:
-                    ┌─────────────────────┐
-                    │  instagram.com DOM  │  ← Content Script đọc
-                    └─────────────────────┘
+                    ┌──────────────────────────────┐
+                    │  Instagram Private API        │
+                    │  /api/v1/friendships/         │  ← Content Script + Service Worker
+                    │  /api/v1/users/               │
+                    └──────────────────────────────┘
 ```
 
 ### 3.2 Mô tả các module chính
 
 | Module | Chức năng | File(s) |
 |--------|-----------|---------|
-| **Content Script** | Inject vào trang Instagram, scrape DOM để lấy following/followers, quét privacy, kiểm tra links | `content/instagram.js`, `content/instagram.css` |
-| **Background Service Worker** | Xử lý logic nền: message routing, notifications, scheduled alarms | `background/service-worker.js` |
+| **Content Script** | Inject vào trang Instagram, gọi Instagram API để capture following/followers, quét privacy, kiểm tra links | `content/instagram.js`, `content/instagram.css` |
+| **Background Service Worker** | Instagram API (background), auto-capture theo lịch, message routing, notifications, alarms, cookies management | `background/service-worker.js` |
 | **Popup UI** | Giao diện compact khi click icon extension: hiện trạng thái, quick actions, stats | `popup/popup.html`, `popup/popup.js`, `popup/popup.css` |
 | **Dashboard** | Trang full-size: xem snapshots, so sánh diff, privacy history, alerts, settings | `dashboard/dashboard.html`, `dashboard/dashboard.js`, `dashboard/dashboard.css` |
 | **Storage Library** | API wrapper cho Chrome Storage: CRUD snapshots, scans, alerts, settings | `lib/storage.js` |
@@ -153,16 +157,20 @@
                            │
               Tương tác trên Instagram
                            │
-                    ┌──────▼───────┐
-                    │   Content    │
-                    │   Script     │
-                    └──────┬───────┘
-                           │
             ┌──────────────┼──────────────┐
             │              │              │
      ┌──────▼──────┐ ┌────▼─────┐ ┌──────▼──────┐
-     │  Snapshot   │ │ Privacy  │ │   Link      │
-     │  Capture    │ │ Scan     │ │   Check     │
+     │  Content    │ │ Service  │ │  Dashboard  │
+     │  Script     │ │ Worker   │ │             │
+     └──────┬──────┘ └────┬─────┘ └──────┬──────┘
+            │              │              │
+            │         Instagram           │
+            │        Private API          │
+            │              │              │
+     ┌──────▼──────┐ ┌────▼─────┐ ┌──────▼──────┐
+     │  Snapshot   │ │  Auto    │ │  Privacy    │
+     │  Capture    │ │ Capture  │ │  Scan       │
+     │  (manual)   │ │ (alarm)  │ │  Link Check │
      └──────┬──────┘ └────┬─────┘ └──────┬──────┘
             │              │              │
             └──────────────┼──────────────┘
@@ -219,38 +227,45 @@
                         └───────────────────────────────────────────┘
 ```
 
-### 4.3 Sequence Diagram - Capture Following
+### 4.3 Sequence Diagram - Capture Following (API-based)
 
 ```
-    User          Content Script      Modal/DOM       Storage        Background
+    User          Content Script      Background SW    IG API         Storage
      │                 │                  │              │               │
      │  Click Capture  │                  │              │               │
      │────────────────►│                  │              │               │
-     │                 │  Click Following │              │               │
-     │                 │  Link            │              │               │
-     │                 │─────────────────►│              │               │
      │                 │                  │              │               │
-     │                 │  Wait for Modal  │              │               │
-     │                 │◄─────────────────│              │               │
+     │                 │  FETCH_PROFILE   │              │               │
+     │                 │  _INFO           │              │               │
+     │                 │─────────────────►│              │               │
+     │                 │                  │  /api/v1/    │               │
+     │                 │                  │  users/      │               │
+     │                 │                  │─────────────►│               │
+     │                 │                  │  Profile +   │               │
+     │                 │  expectedCount   │  userId      │               │
+     │                 │◄─────────────────│◄─────────────│               │
      │                 │                  │              │               │
      │                 │  ┌───────────────┤              │               │
      │                 │  │ Loop:         │              │               │
-     │                 │  │ Scroll & Read │              │               │
-     │                 │  │ Collect Users │              │               │
+     │                 │  │ /api/v1/      │              │               │
+     │                 │  │ friendships/  │              │               │
+     │   Progress      │  │ {id}/following│              │               │
+     │◄────────────────│  │ ?count=200    │              │               │
+     │                 │  │ &max_id=...   │              │               │
      │                 │  │               │              │               │
-     │   Progress      │  │               │              │               │
-     │◄────────────────│  │               │              │               │
+     │                 │  │ Verify count  │              │               │
+     │                 │  │ vs expected   │              │               │
+     │                 │  │ Retry if miss │              │               │
      │                 │  └───────────────┤              │               │
      │                 │                  │              │               │
      │                 │  Save Snapshot   │              │               │
-     │                 │──────────────────┼─────────────►│               │
+     │                 │──────────────────┼──────────────┼──────────────►│
      │                 │                  │              │               │
-     │                 │  Notify Background              │               │
-     │                 │─────────────────────────────────┼──────────────►│
-     │                 │                  │              │               │
-     │                 │                  │              │  Show         │
-     │  Notification   │                  │              │  Notification │
-     │◄────────────────┼──────────────────┼──────────────┼───────────────│
+     │                 │  SNAPSHOT_SAVED  │              │               │
+     │                 │─────────────────►│              │               │
+     │                 │                  │  Show        │               │
+     │  Notification   │                  │  Notification│               │
+     │◄────────────────┼──────────────────│              │               │
      │                 │                  │              │               │
 ```
 
@@ -317,13 +332,17 @@ SocialShield sử dụng **Chrome Storage Local API** - một dạng key-value s
           "username": "alice_wonder",
           "displayName": "Alice W.",
           "isVerified": false,
-          "profileUrl": "https://www.instagram.com/alice_wonder/"
+          "profileUrl": "https://www.instagram.com/alice_wonder/",
+          "profilePic": "https://...",
+          "userId": "12345678901"
         },
         {
           "username": "bob_builder",
           "displayName": "Bob The Builder",
           "isVerified": true,
-          "profileUrl": "https://www.instagram.com/bob_builder/"
+          "profileUrl": "https://www.instagram.com/bob_builder/",
+          "profilePic": "https://...",
+          "userId": "98765432109"
         }
       ]
     }
@@ -396,6 +415,8 @@ SocialShield sử dụng **Chrome Storage Local API** - một dạng key-value s
 {
   "settings": {
     "notifications": true,
+    "autoCapture": false,
+    "captureInterval": 360,
     "suspiciousThreshold": {
       "massFollow": 20,
       "massUnfollow": 10,
@@ -450,16 +471,18 @@ alerts (N) ──── ordered by timestamp
 
 | # | Feature | Trạng thái | Mô tả |
 |---|---------|-----------|-------|
-| 1 | Capture Following | Done | Tự động scroll và thu thập danh sách following |
-| 2 | Capture Followers | Done | Tự động scroll và thu thập danh sách followers |
-| 3 | Snapshot Storage | Done | Lưu trữ snapshots với timestamp vào Chrome Storage |
+| 1 | Capture Following | Done | Gọi Instagram API `/api/v1/friendships/{id}/following/` với pagination (cursor-based) |
+| 2 | Capture Followers | Done | Gọi Instagram API `/api/v1/friendships/{id}/followers/` với pagination (offset-based, count=25) |
+| 3 | Snapshot Storage | Done | Lưu trữ snapshots với timestamp, userId vào Chrome Storage |
 | 4 | Snapshot Viewer | Done | Xem chi tiết từng snapshot trên Dashboard |
-| 5 | Diff Comparison | Done | So sánh 2 snapshots, hiển thị added/removed |
-| 6 | Suspicious Detection | Done | Phát hiện mass follow/unfollow, tỷ lệ thay đổi cao |
-| 7 | Privacy Scanner | Done | Quét PII (email, SĐT, CCCD) trên profile |
+| 5 | Diff Comparison | Done | So sánh 2 snapshots cùng profile (dùng userId làm key), hiển thị added/removed |
+| 6 | Suspicious Detection | Done | Phát hiện mass follow/unfollow, tỷ lệ thay đổi cao, follower spike |
+| 7 | Privacy Scanner | Done | Quét PII (email, SĐT, CCCD) trên profile qua API |
 | 8 | Link Checker | Done | Kiểm tra phishing, typosquatting, unsafe URLs |
-| 9 | Dashboard | Done | Giao diện đầy đủ với 6 trang |
+| 9 | Dashboard | Done | Giao diện đầy đủ với 6 trang (Overview, Snapshots, Compare, Privacy, Alerts, Settings) |
 | 10 | Export Data | Done | Xuất toàn bộ dữ liệu dạng JSON |
+| 11 | Auto Capture | Done | Tự động capture theo lịch qua Service Worker + Chrome Alarms (không cần mở Instagram) |
+| 12 | Capture Verification | Done | So sánh count với expected từ profile info, retry tối đa 5 lần nếu thiếu |
 
 ### 6.2 Tech Stack & Giải thích
 
@@ -470,6 +493,9 @@ alerts (N) ──── ordered by timestamp
 | **HTML5 + CSS3** | Giao diện | Responsive, CSS Grid/Flexbox, Custom Properties |
 | **Chrome Storage API** | Database | API native của extension, không cần backend riêng, đồng bộ an toàn |
 | **Chrome Notifications API** | Thông báo | Push notification native, không cần server |
+| **Chrome Cookies API** | Authentication | Đọc session cookies Instagram cho API calls từ Service Worker |
+| **Chrome Alarms API** | Scheduling | Lên lịch auto-capture định kỳ (1h - 24h) |
+| **Instagram Private API** | Data Source | `/api/v1/friendships/`, `/api/v1/users/` - lấy dữ liệu chính xác |
 
 **Tại sao không dùng React/Vue?**
 - Extension nhẹ, không cần SPA framework nặng
@@ -489,9 +515,9 @@ alerts (N) ──── ordered by timestamp
 socialshield/
 ├── manifest.json              # Extension configuration (MV3)
 ├── background/
-│   └── service-worker.js      # Background logic, notifications, alarms
+│   └── service-worker.js      # Background IG API, auto-capture, notifications, alarms
 ├── content/
-│   ├── instagram.js           # Content script - DOM scraping, UI injection
+│   ├── instagram.js           # Content script - Instagram API calls, UI injection
 │   └── instagram.css          # Styles cho injected UI
 ├── popup/
 │   ├── popup.html             # Popup layout
@@ -519,7 +545,7 @@ socialshield/
 - Hỗ trợ thêm Twitter/X, Facebook
 - Tích hợp Google Safe Browsing API cho link checking
 - Biểu đồ timeline (Chart.js) cho biến động followers
-- Auto-capture theo lịch (scheduled snapshots)
+- Bot detection heuristic (phân tích pattern: no profile pic, low followers, etc.)
 
 #### Seminar 3 (dự kiến)
 - Backend API (Node.js) cho multi-device sync

@@ -266,6 +266,20 @@
     },
 
     /**
+     * Tính jazoest từ sessionid cookie (checksum Instagram dùng cho POST requests)
+     */
+    getJazoest() {
+      const match = document.cookie.match(/sessionid=([^;]+)/);
+      if (!match) return '';
+      const sessionId = match[1];
+      let sum = 0;
+      for (let i = 0; i < sessionId.length; i++) {
+        sum += sessionId.charCodeAt(i);
+      }
+      return '2' + sum;
+    },
+
+    /**
      * Lấy User ID từ username qua API
      */
     async fetchUserId(username) {
@@ -328,10 +342,11 @@
         let maxId = null;
         let hasMore = true;
         let page = 0;
-        // Following dùng cursor (next_max_id từ response), followers dùng offset cộng dồn
+        // Following dùng cursor (next_max_id từ response)
+        // Followers: bắt chước native IG behavior: count=12, offset cộng dồn, POST show_many sau mỗi page
         const isFollowers = type === 'followers';
-        const perPage = isFollowers ? 25 : 200;
-        let offset = 0; // offset cộng dồn cho followers
+        const perPage = isFollowers ? 12 : 200;
+        let offset = 0;
 
         while (hasMore && this.isCapturing) {
           page++;
@@ -344,11 +359,10 @@
           try {
             let url;
             if (isFollowers) {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}`;
+              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
               if (offset > 0) {
                 url += `&max_id=${offset}`;
               }
-              url += `&search_surface=follow_list_page`;
             } else {
               url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?count=${perPage}`;
               if (maxId) {
@@ -375,6 +389,7 @@
 
             const data = await res.json();
             const returnedCount = data.users ? data.users.length : 0;
+            const pageUserIds = [];
 
             if (data.users && returnedCount > 0) {
               for (const u of data.users) {
@@ -389,17 +404,34 @@
                     userId: u.pk || u.pk_id || '',
                   });
                 }
+                pageUserIds.push(String(u.pk || u.pk_id || ''));
               }
             }
 
             if (isFollowers) {
-              // Followers: cộng dồn offset, dừng khi không còn user trả về
+              // Bắt chước native: POST show_many sau mỗi page followers
+              if (pageUserIds.length > 0) {
+                try {
+                  await fetch('https://www.instagram.com/api/v1/friendships/show_many/', {
+                    method: 'POST',
+                    headers: {
+                      'x-csrftoken': this.getCsrfToken(),
+                      'x-ig-app-id': '936619743392459',
+                      'x-requested-with': 'XMLHttpRequest',
+                      'content-type': 'application/x-www-form-urlencoded',
+                    },
+                    credentials: 'include',
+                    body: `user_ids=${pageUserIds.join(',')}&jazoest=${this.getJazoest()}`,
+                  });
+                } catch (e) {
+                  // show_many fail không ảnh hưởng data, bỏ qua
+                }
+              }
               offset += returnedCount;
               if (returnedCount < perPage) {
                 hasMore = false;
               }
             } else {
-              // Following: dùng cursor từ response
               if (data.next_max_id) {
                 maxId = data.next_max_id;
               } else {

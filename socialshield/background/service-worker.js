@@ -137,7 +137,7 @@ const InstagramAPI = {
     const csrfToken = await this.getCsrfToken();
     const cookieHeader = await this.buildCookieHeader();
     const isFollowers = type === 'followers';
-    const perPage = isFollowers ? 25 : 200;
+    const perPage = isFollowers ? 12 : 200;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
@@ -181,6 +181,7 @@ const InstagramAPI = {
 
           const data = await res.json();
           const returnedCount = data.users ? data.users.length : 0;
+          const pageUserIds = [];
 
           if (data.users && returnedCount > 0) {
             for (const u of data.users) {
@@ -195,10 +196,29 @@ const InstagramAPI = {
                   userId: u.pk || u.pk_id || '',
                 });
               }
+              pageUserIds.push(String(u.pk || u.pk_id || ''));
             }
           }
 
           if (isFollowers) {
+            // Bắt chước native: POST show_many sau mỗi page followers
+            if (pageUserIds.length > 0) {
+              try {
+                await fetch('https://www.instagram.com/api/v1/friendships/show_many/', {
+                  method: 'POST',
+                  headers: {
+                    'x-csrftoken': csrfToken,
+                    'x-ig-app-id': '936619743392459',
+                    'x-requested-with': 'XMLHttpRequest',
+                    'content-type': 'application/x-www-form-urlencoded',
+                    'Cookie': cookieHeader,
+                  },
+                  body: `user_ids=${pageUserIds.join(',')}`,
+                });
+              } catch (e) {
+                // show_many fail không ảnh hưởng data
+              }
+            }
             offset += returnedCount;
             if (returnedCount < perPage) {
               hasMore = false;
