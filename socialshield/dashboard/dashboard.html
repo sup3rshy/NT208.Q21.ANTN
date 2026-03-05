@@ -232,6 +232,44 @@
 
         <div class="ss-card">
           <div class="ss-card-header">
+            <h2>Auto Capture (Background)</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Enable Auto Capture</div>
+                <div class="ss-setting-desc">Automatically capture snapshots in the background (no need to keep Instagram open)</div>
+              </div>
+              <label class="ss-toggle">
+                <input type="checkbox" id="setting-auto-capture">
+                <span class="ss-toggle-slider"></span>
+              </label>
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Capture Interval</div>
+                <div class="ss-setting-desc">How often to auto-capture (in hours)</div>
+              </div>
+              <select class="ss-select" id="setting-capture-interval" style="width: 120px;">
+                <option value="60">1 hour</option>
+                <option value="180">3 hours</option>
+                <option value="360" selected>6 hours</option>
+                <option value="720">12 hours</option>
+                <option value="1440">24 hours</option>
+              </select>
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Run Now</div>
+                <div class="ss-setting-desc">Manually trigger auto-capture for all tracked profiles</div>
+              </div>
+              <button class="ss-btn ss-btn-sm" id="btn-capture-now">Capture Now</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
             <h2>Detection Thresholds</h2>
           </div>
           <div class="ss-card-body">

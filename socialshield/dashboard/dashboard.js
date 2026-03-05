@@ -540,15 +540,19 @@
 
     async loadSettings() {
       const settings = await SocialShieldStorage.getSettings();
-      document.getElementById('setting-mass-follow').value = settings.suspiciousThreshold.massFollow;
-      document.getElementById('setting-mass-unfollow').value = settings.suspiciousThreshold.massUnfollow;
-      document.getElementById('setting-change-rate').value = settings.suspiciousThreshold.changeRate;
-      document.getElementById('setting-notifications').checked = settings.notifications;
+      document.getElementById('setting-mass-follow').value = settings.suspiciousThreshold?.massFollow || 20;
+      document.getElementById('setting-mass-unfollow').value = settings.suspiciousThreshold?.massUnfollow || 10;
+      document.getElementById('setting-change-rate').value = settings.suspiciousThreshold?.changeRate || 30;
+      document.getElementById('setting-notifications').checked = settings.notifications !== false;
+      document.getElementById('setting-auto-capture').checked = !!settings.autoCapture;
+      document.getElementById('setting-capture-interval').value = String(settings.captureInterval || 360);
     },
 
     async saveSettings() {
       const settings = {
         notifications: document.getElementById('setting-notifications').checked,
+        autoCapture: document.getElementById('setting-auto-capture').checked,
+        captureInterval: parseInt(document.getElementById('setting-capture-interval').value) || 360,
         suspiciousThreshold: {
           massFollow: parseInt(document.getElementById('setting-mass-follow').value) || 20,
           massUnfollow: parseInt(document.getElementById('setting-mass-unfollow').value) || 10,
@@ -556,6 +560,10 @@
         }
       };
       await SocialShieldStorage.saveSettings(settings);
+
+      // Notify service worker to update alarm
+      chrome.runtime.sendMessage({ type: 'UPDATE_AUTO_CAPTURE' });
+
       alert('Settings saved!');
     },
 
@@ -588,6 +596,27 @@
       document.getElementById('btn-save-settings').addEventListener('click', () => this.saveSettings());
       document.getElementById('btn-export').addEventListener('click', () => this.exportData());
       document.getElementById('btn-clear-all').addEventListener('click', () => this.clearAllData());
+
+      // Capture Now button
+      document.getElementById('btn-capture-now').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-capture-now');
+        btn.disabled = true;
+        btn.textContent = 'Capturing...';
+        try {
+          await chrome.runtime.sendMessage({ type: 'RUN_AUTO_CAPTURE_NOW' });
+          btn.textContent = 'Done!';
+          setTimeout(() => {
+            btn.textContent = 'Capture Now';
+            btn.disabled = false;
+          }, 2000);
+        } catch (err) {
+          btn.textContent = 'Error';
+          setTimeout(() => {
+            btn.textContent = 'Capture Now';
+            btn.disabled = false;
+          }, 2000);
+        }
+      });
 
       // Clear snapshots
       document.getElementById('btn-clear-snapshots').addEventListener('click', async () => {

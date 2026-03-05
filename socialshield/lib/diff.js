@@ -11,16 +11,22 @@ const SocialShieldDiff = {
    * @returns {Object} kết quả diff
    */
   compare(oldSnap, newSnap) {
-    const oldMap = new Map(oldSnap.data.map(u => [u.username, u]));
-    const newMap = new Map(newSnap.data.map(u => [u.username, u]));
+    // Dùng userId (pk) làm key chính vì nó không bao giờ thay đổi.
+    // Fallback sang username (normalized) cho snapshots cũ không có userId.
+    const getKey = (u) => {
+      if (u.userId) return String(u.userId);
+      return (u.username || '').trim().toLowerCase();
+    };
+    const oldMap = new Map(oldSnap.data.map(u => [getKey(u), u]));
+    const newMap = new Map(newSnap.data.map(u => [getKey(u), u]));
 
     const added = [];
     const removed = [];
     const unchanged = [];
 
     // Tìm users mới (có trong new, không có trong old)
-    for (const [username, user] of newMap) {
-      if (!oldMap.has(username)) {
+    for (const [key, user] of newMap) {
+      if (!oldMap.has(key)) {
         added.push(user);
       } else {
         unchanged.push(user);
@@ -28,8 +34,8 @@ const SocialShieldDiff = {
     }
 
     // Tìm users đã bị xóa (có trong old, không có trong new)
-    for (const [username, user] of oldMap) {
-      if (!newMap.has(username)) {
+    for (const [key, user] of oldMap) {
+      if (!newMap.has(key)) {
         removed.push(user);
       }
     }
