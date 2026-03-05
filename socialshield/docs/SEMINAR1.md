@@ -542,7 +542,7 @@ socialshield/
 ### 6.4 Kế hoạch phát triển
 
 #### Seminar 2 (dự kiến)
-- Hỗ trợ thêm Twitter/X, Facebook
+- Hỗ trợ thêm Twitter/X
 - Tích hợp Google Safe Browsing API cho link checking
 - Biểu đồ timeline (Chart.js) cho biến động followers
 - Bot detection heuristic (phân tích pattern: no profile pic, low followers, etc.)
