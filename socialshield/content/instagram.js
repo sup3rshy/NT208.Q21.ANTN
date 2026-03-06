@@ -330,9 +330,6 @@
         let maxId = null;
         let hasMore = true;
         let page = 0;
-        // Followers: offset-based (max_id cộng dồn theo Network tab)
-        // Following: cursor-based (next_max_id từ response)
-        let offset = 0;
 
         while (hasMore && this.isCapturing) {
           page++;
@@ -343,17 +340,15 @@
           );
 
           try {
+            // Cả followers và following đều dùng cursor-based (next_max_id từ response)
             let url;
             if (isFollowers) {
               url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
-              if (offset > 0) {
-                url += `&max_id=${offset}`;
-              }
             } else {
               url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?count=${perPage}`;
-              if (maxId) {
-                url += `&max_id=${maxId}`;
-              }
+            }
+            if (maxId) {
+              url += `&max_id=${maxId}`;
             }
 
             const res = await fetch(url, {
@@ -393,41 +388,33 @@
             }
 
             const data = await res.json();
-            const returnedCount = data.users ? data.users.length : 0;
 
-            if (data.users && returnedCount > 0) {
+            if (data.users && data.users.length > 0) {
               for (const u of data.users) {
-                const key = (u.username || '').toLowerCase();
-                if (!userMap.has(key)) {
+                // Dedup theo userId (pk) thay vì username
+                const key = String(u.pk || u.pk_id || '');
+                if (key && !userMap.has(key)) {
                   userMap.set(key, {
                     username: u.username,
                     displayName: u.full_name || '',
                     isVerified: u.is_verified || false,
                     profileUrl: `https://www.instagram.com/${u.username}/`,
                     profilePic: u.profile_pic_url || '',
-                    userId: u.pk || u.pk_id || '',
+                    userId: key,
                   });
                 }
               }
             }
 
-            if (isFollowers) {
-              // Offset-based: max_id cộng dồn (theo Network tab)
-              offset += returnedCount;
-              if (returnedCount < perPage) {
-                hasMore = false;
-              }
+            // Cursor-based: dừng khi không còn next_max_id hoặc big_list = false
+            if (data.next_max_id && data.big_list !== false) {
+              maxId = data.next_max_id;
             } else {
-              // Cursor-based: next_max_id từ response
-              if (data.next_max_id) {
-                maxId = data.next_max_id;
-              } else {
-                hasMore = false;
-              }
+              hasMore = false;
             }
 
             if (hasMore) {
-              await this.wait(800 + Math.random() * 400);
+              await this.wait(2000 + Math.random() * 1000);
             }
           } catch (err) {
             console.error(`[SocialShield] fetchConnectionsAPI error on page ${page}:`, err);
