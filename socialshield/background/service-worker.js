@@ -147,6 +147,8 @@ const InstagramAPI = {
       let maxId = null;
       let hasMore = true;
       let page = 0;
+      // Followers: offset-based (max_id cộng dồn theo Network tab)
+      // Following: cursor-based (next_max_id từ response)
       let offset = 0;
 
       while (hasMore) {
@@ -199,7 +201,6 @@ const InstagramAPI = {
 
           const data = await res.json();
           const returnedCount = data.users ? data.users.length : 0;
-          const pageUserIds = [];
 
           if (data.users && returnedCount > 0) {
             for (const u of data.users) {
@@ -214,16 +215,17 @@ const InstagramAPI = {
                   userId: u.pk || u.pk_id || '',
                 });
               }
-              pageUserIds.push(String(u.pk || u.pk_id || ''));
             }
           }
 
           if (isFollowers) {
+            // Offset-based: max_id cộng dồn (theo Network tab)
             offset += returnedCount;
             if (returnedCount < perPage) {
               hasMore = false;
             }
           } else {
+            // Cursor-based: next_max_id từ response
             if (data.next_max_id) {
               maxId = data.next_max_id;
             } else {

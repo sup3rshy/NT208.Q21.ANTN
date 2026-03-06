@@ -471,8 +471,8 @@ alerts (N) ──── ordered by timestamp
 
 | # | Feature | Trạng thái | Mô tả |
 |---|---------|-----------|-------|
-| 1 | Capture Following | Done | Gọi Instagram API `/api/v1/friendships/{id}/following/` với pagination (cursor-based) |
-| 2 | Capture Followers | Done | Gọi Instagram API `/api/v1/friendships/{id}/followers/` với pagination (offset-based, count=25) |
+| 1 | Capture Following | Done | Gọi Instagram API `/api/v1/friendships/{id}/following/` với cursor-based pagination (`next_max_id`) |
+| 2 | Capture Followers | Done | Gọi Instagram API `/api/v1/friendships/{id}/followers/` với offset-based pagination (`count=25`, `max_id` cộng dồn) |
 | 3 | Snapshot Storage | Done | Lưu trữ snapshots với timestamp, userId vào Chrome Storage |
 | 4 | Snapshot Viewer | Done | Xem chi tiết từng snapshot trên Dashboard |
 | 5 | Diff Comparison | Done | So sánh 2 snapshots cùng profile (dùng userId làm key), hiển thị added/removed |

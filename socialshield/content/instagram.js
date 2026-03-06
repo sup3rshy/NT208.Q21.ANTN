@@ -266,20 +266,6 @@
     },
 
     /**
-     * Tính jazoest từ sessionid cookie (checksum Instagram dùng cho POST requests)
-     */
-    getJazoest() {
-      const match = document.cookie.match(/sessionid=([^;]+)/);
-      if (!match) return '';
-      const sessionId = match[1];
-      let sum = 0;
-      for (let i = 0; i < sessionId.length; i++) {
-        sum += sessionId.charCodeAt(i);
-      }
-      return '2' + sum;
-    },
-
-    /**
      * Lấy User ID từ username qua API
      */
     async fetchUserId(username) {
@@ -333,8 +319,7 @@
       // Map username → user object để merge kết quả giữa các attempts
       const userMap = new Map();
       const isFollowers = type === 'followers';
-      // rank_token cho following (UUID, giữ qua các pages)
-      const rankToken = !isFollowers ? crypto.randomUUID() : null;
+      const perPage = isFollowers ? 25 : 200;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
@@ -342,10 +327,12 @@
           await this.wait(1500 + Math.random() * 500);
         }
 
-        // Cả followers và following đều dùng cursor-based pagination (next_max_id từ response)
-        let nextMaxId = null;
+        let maxId = null;
         let hasMore = true;
         let page = 0;
+        // Followers: offset-based (max_id cộng dồn theo Network tab)
+        // Following: cursor-based (next_max_id từ response)
+        let offset = 0;
 
         while (hasMore && this.isCapturing) {
           page++;
@@ -358,14 +345,15 @@
           try {
             let url;
             if (isFollowers) {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?search_surface=follow_list_page`;
+              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
+              if (offset > 0) {
+                url += `&max_id=${offset}`;
+              }
             } else {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?includes_hashtags=true&rank_token=${rankToken}`;
-            }
-            // Params chung theo instagram-private-api
-            url += `&order=default&query=&enable_groups=true`;
-            if (nextMaxId) {
-              url += `&max_id=${nextMaxId}`;
+              url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?count=${perPage}`;
+              if (maxId) {
+                url += `&max_id=${maxId}`;
+              }
             }
 
             const res = await fetch(url, {
@@ -405,8 +393,9 @@
             }
 
             const data = await res.json();
+            const returnedCount = data.users ? data.users.length : 0;
 
-            if (data.users && data.users.length > 0) {
+            if (data.users && returnedCount > 0) {
               for (const u of data.users) {
                 const key = (u.username || '').toLowerCase();
                 if (!userMap.has(key)) {
@@ -422,11 +411,19 @@
               }
             }
 
-            // Cả 2 endpoint đều dùng cursor: next_max_id từ response
-            if (data.next_max_id) {
-              nextMaxId = data.next_max_id;
+            if (isFollowers) {
+              // Offset-based: max_id cộng dồn (theo Network tab)
+              offset += returnedCount;
+              if (returnedCount < perPage) {
+                hasMore = false;
+              }
             } else {
-              hasMore = false;
+              // Cursor-based: next_max_id từ response
+              if (data.next_max_id) {
+                maxId = data.next_max_id;
+              } else {
+                hasMore = false;
+              }
             }
 
             if (hasMore) {
