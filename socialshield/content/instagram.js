@@ -324,7 +324,7 @@
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
           this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
-          await this.wait(1500 + Math.random() * 500);
+          await this.wait(4500 + Math.random() * 500);
         }
 
         let maxId = null;
@@ -414,7 +414,7 @@
             }
 
             if (hasMore) {
-              await this.wait(2000 + Math.random() * 1000);
+              await this.wait(4000 + Math.random() * 1000);
             }
           } catch (err) {
             console.error(`[SocialShield] fetchConnectionsAPI error on page ${page}:`, err);
