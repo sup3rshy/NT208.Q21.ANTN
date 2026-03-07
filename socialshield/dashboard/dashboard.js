@@ -8,6 +8,7 @@
   const Dashboard = {
     currentPage: 'overview',
     snapshotCache: {},
+    timelineChart: null,
 
     // ==================== Initialization ====================
 
@@ -71,8 +72,9 @@
           badge.style.display = 'none';
         }
 
-        // Load recent activity
+        // Load recent activity + timeline
         await this.loadRecentActivity();
+        await this.loadTimelineChart();
       } catch (e) {
         console.error('Error loading overview:', e);
       }
@@ -131,6 +133,133 @@
           </div>
         </div>
       `).join('');
+    },
+
+    // ==================== Timeline Chart ====================
+
+    async loadTimelineChart() {
+      const groups = await SocialShieldStorage.getAllSnapshotGroups();
+      const profileSelect = document.getElementById('timeline-profile');
+      const canvas = document.getElementById('timeline-chart');
+      const empty = document.getElementById('timeline-empty');
+
+      // Populate profile selector
+      profileSelect.innerHTML = '<option value="">Select profile...</option>';
+      const validGroups = [];
+      for (const group of groups) {
+        const snapshots = await SocialShieldStorage.getSnapshots(group.platform, group.username, group.type);
+        if (snapshots.length >= 2) {
+          validGroups.push({ ...group, snapshots });
+          const label = `@${group.username} - ${group.type}`;
+          profileSelect.add(new Option(label, group.key));
+        }
+      }
+
+      // Remove old listener by cloning
+      const newSelect = profileSelect.cloneNode(true);
+      profileSelect.parentNode.replaceChild(newSelect, profileSelect);
+
+      newSelect.addEventListener('change', () => {
+        const key = newSelect.value;
+        if (!key) {
+          canvas.style.display = 'none';
+          empty.style.display = '';
+          if (this.timelineChart) { this.timelineChart.destroy(); this.timelineChart = null; }
+          return;
+        }
+        const group = validGroups.find(g => g.key === key);
+        if (group) this.renderTimelineChart(group.snapshots);
+      });
+
+      // Auto-select first if available
+      if (validGroups.length > 0) {
+        newSelect.value = validGroups[0].key;
+        this.renderTimelineChart(validGroups[0].snapshots);
+      } else {
+        canvas.style.display = 'none';
+        empty.style.display = '';
+      }
+    },
+
+    renderTimelineChart(snapshots) {
+      const canvas = document.getElementById('timeline-chart');
+      const empty = document.getElementById('timeline-empty');
+      canvas.style.display = '';
+      empty.style.display = 'none';
+
+      const timeline = SocialShieldDiff.buildTimeline(snapshots);
+      const labels = timeline.map(t => {
+        const d = new Date(t.timestamp);
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' +
+               d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      });
+      const counts = timeline.map(t => t.count);
+      const changes = timeline.map(t => t.change);
+
+      if (this.timelineChart) this.timelineChart.destroy();
+
+      this.timelineChart = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Total Count',
+              data: counts,
+              borderColor: '#00d4aa',
+              backgroundColor: 'rgba(0, 212, 170, 0.1)',
+              fill: true,
+              tension: 0.3,
+              pointRadius: 4,
+              pointBackgroundColor: '#00d4aa',
+              yAxisID: 'y'
+            },
+            {
+              label: 'Change',
+              data: changes,
+              type: 'bar',
+              backgroundColor: changes.map(c => c > 0 ? 'rgba(16, 185, 129, 0.6)' : c < 0 ? 'rgba(239, 68, 68, 0.6)' : 'rgba(136, 136, 170, 0.3)'),
+              borderRadius: 3,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: {
+              labels: { color: '#8888aa', font: { size: 12 } }
+            },
+            tooltip: {
+              backgroundColor: '#1a1a35',
+              titleColor: '#e8e8f0',
+              bodyColor: '#8888aa',
+              borderColor: 'rgba(255,255,255,0.06)',
+              borderWidth: 1
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#555577', font: { size: 10 }, maxRotation: 45 },
+              grid: { color: 'rgba(255,255,255,0.04)' }
+            },
+            y: {
+              position: 'left',
+              ticks: { color: '#8888aa' },
+              grid: { color: 'rgba(255,255,255,0.04)' },
+              title: { display: true, text: 'Total', color: '#8888aa' }
+            },
+            y1: {
+              position: 'right',
+              ticks: { color: '#8888aa' },
+              grid: { drawOnChartArea: false },
+              title: { display: true, text: 'Change', color: '#8888aa' }
+            }
+          }
+        }
+      });
     },
 
     // ==================== Snapshots Page ====================
@@ -215,21 +344,41 @@
       const title = document.getElementById('modal-snapshot-title');
       const body = document.getElementById('modal-snapshot-body');
 
+      // Run bot analysis
+      const botAnalysis = SocialShieldDiff.analyzeBots(snap.data);
+
+      const botSummaryHtml = `
+        <div style="margin-bottom: 16px; padding: 12px; border-radius: 8px; background: ${botAnalysis.botRatio > 20 ? 'rgba(239,68,68,0.1)' : botAnalysis.botCount > 0 ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)'}; border: 1px solid ${botAnalysis.botRatio > 20 ? 'rgba(239,68,68,0.3)' : botAnalysis.botCount > 0 ? 'rgba(245,158,11,0.3)' : 'rgba(16,185,129,0.3)'};">
+          <div style="font-weight: 600; margin-bottom: 4px; color: var(--text-primary);">
+            Bot Analysis: ${botAnalysis.botCount}/${botAnalysis.totalAnalyzed} suspicious (${botAnalysis.botRatio}%)
+          </div>
+          <div style="font-size: 13px; color: var(--text-secondary);">${this.escapeHtml(botAnalysis.summary)}</div>
+        </div>
+      `;
+
       title.textContent = `@${snap.username} - ${snap.type} (${snap.count})`;
       body.innerHTML = `
         <div style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">
           Captured: ${this.formatDate(snap.timestamp)}
         </div>
+        ${botSummaryHtml}
         <div class="ss-user-list">
-          ${snap.data.map(user => `
-            <div class="ss-user-item">
-              <a class="ss-user-link" href="https://www.instagram.com/${user.username}/" target="_blank">
-                @${this.escapeHtml(user.username)}
-              </a>
-              ${user.isVerified ? '<span class="ss-verified-badge">✓</span>' : ''}
-              ${user.displayName ? `<span class="ss-user-display-name">${this.escapeHtml(user.displayName)}</span>` : ''}
-            </div>
-          `).join('')}
+          ${snap.data.map(user => {
+            const bot = SocialShieldDiff.scoreBotLikelihood(user);
+            const botTag = bot.isLikelyBot
+              ? `<span style="background: rgba(239,68,68,0.15); color: #ef4444; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px;" title="${bot.reasons.join(', ')}">BOT ${bot.score}%</span>`
+              : '';
+            return `
+              <div class="ss-user-item" ${bot.isLikelyBot ? 'style="border-left: 2px solid #ef4444; padding-left: 8px;"' : ''}>
+                <a class="ss-user-link" href="https://www.instagram.com/${user.username}/" target="_blank">
+                  @${this.escapeHtml(user.username)}
+                </a>
+                ${user.isVerified ? '<span class="ss-verified-badge">✓</span>' : ''}
+                ${user.displayName ? `<span class="ss-user-display-name">${this.escapeHtml(user.displayName)}</span>` : ''}
+                ${botTag}
+              </div>
+            `;
+          }).join('')}
         </div>
       `;
 
@@ -546,6 +695,8 @@
       document.getElementById('setting-notifications').checked = settings.notifications !== false;
       document.getElementById('setting-auto-capture').checked = !!settings.autoCapture;
       document.getElementById('setting-capture-interval').value = String(settings.captureInterval || 360);
+      document.getElementById('setting-sb-apikey').value = settings.safeBrowsingApiKey || '';
+      document.getElementById('setting-sb-enabled').checked = !!settings.safeBrowsingEnabled;
     },
 
     async saveSettings() {
@@ -553,6 +704,8 @@
         notifications: document.getElementById('setting-notifications').checked,
         autoCapture: document.getElementById('setting-auto-capture').checked,
         captureInterval: parseInt(document.getElementById('setting-capture-interval').value) || 360,
+        safeBrowsingApiKey: document.getElementById('setting-sb-apikey').value.trim(),
+        safeBrowsingEnabled: document.getElementById('setting-sb-enabled').checked,
         suspiciousThreshold: {
           massFollow: parseInt(document.getElementById('setting-mass-follow').value) || 20,
           massUnfollow: parseInt(document.getElementById('setting-mass-unfollow').value) || 10,

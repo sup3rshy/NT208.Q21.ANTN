@@ -400,6 +400,9 @@
                     isVerified: u.is_verified || false,
                     profileUrl: `https://www.instagram.com/${u.username}/`,
                     profilePic: u.profile_pic_url || '',
+                    hasAnonymousProfilePic: !!u.has_anonymous_profile_picture,
+                    isPrivate: !!u.is_private,
+                    latestReelMedia: u.latest_reel_media || 0,
                     userId: key,
                   });
                 }
@@ -445,6 +448,20 @@
       const prevSnapshot = snapshots[snapshots.length - 2];
       const diff = SocialShieldDiff.compare(prevSnapshot, newSnapshot);
       const alerts = SocialShieldDiff.detectSuspicious(diff);
+
+      // Bot detection on new followers/following
+      if (diff.added.length > 0) {
+        const botAnalysis = SocialShieldDiff.analyzeBots(diff.added);
+        if (botAnalysis.botRatio > 30) {
+          alerts.push({
+            type: 'bot_detected',
+            severity: 'warning',
+            title: 'Potential Bot Accounts',
+            message: `${botAnalysis.botCount} of ${diff.added.length} new ${type} show bot-like patterns (${botAnalysis.botRatio}%)`,
+            count: botAnalysis.botCount
+          });
+        }
+      }
 
       if (alerts.length > 0) {
         for (const alert of alerts) {
@@ -573,7 +590,31 @@
     async runLinkScan() {
       this.notify('Scanning links on this page...', 'info');
 
-      const results = SocialShieldScanner.scanAllLinks(document);
+      // Check if Safe Browsing API is enabled
+      let sbApiKey = null;
+      try {
+        const settings = await SocialShieldStorage.getSettings();
+        if (settings.safeBrowsingEnabled && settings.safeBrowsingApiKey) {
+          sbApiKey = settings.safeBrowsingApiKey;
+        }
+      } catch (e) { /* ignore */ }
+
+      // If Safe Browsing enabled, use checkLinkFull for each external link
+      let results;
+      if (sbApiKey) {
+        this.notify('Checking links with Google Safe Browsing...', 'info');
+        const links = SocialShieldScanner.scanAllLinks(document);
+        results = [];
+        for (const linkResult of links) {
+          const fullResult = await SocialShieldScanner.checkLinkFull(linkResult.url, sbApiKey);
+          fullResult.element = linkResult.element;
+          fullResult.text = linkResult.text;
+          results.push(fullResult);
+        }
+      } else {
+        results = SocialShieldScanner.scanAllLinks(document);
+      }
+
       const unsafe = results.filter(r => !r.safe);
       const warnings = results.filter(r => r.warnings.length > 0 && r.safe);
 

@@ -281,6 +281,89 @@ const SocialShieldScanner = {
     return results;
   },
 
+  // ==================== Google Safe Browsing API ====================
+
+  /**
+   * Kiểm tra URL qua Google Safe Browsing Lookup API v4
+   * @param {string} url - URL cần kiểm tra
+   * @param {string} apiKey - Google API key
+   * @returns {Object|null} kết quả từ API, null nếu lỗi
+   */
+  async checkSafeBrowsing(url, apiKey) {
+    if (!apiKey || !url) return null;
+
+    try {
+      const res = await fetch(
+        `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client: { clientId: 'socialshield', clientVersion: '1.0.0' },
+            threatInfo: {
+              threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POTENTIALLY_HARMFUL_APPLICATION'],
+              platformTypes: ['ANY_PLATFORM'],
+              threatEntryTypes: ['URL'],
+              threatEntries: [{ url }]
+            }
+          })
+        }
+      );
+
+      if (!res.ok) {
+        console.error(`[SocialShield] Safe Browsing API error: ${res.status}`);
+        return null;
+      }
+
+      const data = await res.json();
+      if (data.matches && data.matches.length > 0) {
+        return {
+          unsafe: true,
+          threats: data.matches.map(m => ({
+            type: m.threatType,
+            platform: m.platformType
+          }))
+        };
+      }
+      return { unsafe: false, threats: [] };
+    } catch (err) {
+      console.error('[SocialShield] Safe Browsing API error:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Kiểm tra link kết hợp heuristic + Google Safe Browsing API
+   * @param {string} url
+   * @param {string} apiKey - Google Safe Browsing API key (optional)
+   * @returns {Object} kết quả kiểm tra
+   */
+  async checkLinkFull(url, apiKey) {
+    // Chạy heuristic check trước (nhanh)
+    const result = this.checkLink(url);
+
+    // Nếu có API key, chạy Safe Browsing check song song
+    if (apiKey) {
+      const sbResult = await this.checkSafeBrowsing(url, apiKey);
+      if (sbResult) {
+        result.safeBrowsingChecked = true;
+        if (sbResult.unsafe) {
+          result.safe = false;
+          result.score = Math.max(result.score - 60, 0);
+          for (const threat of sbResult.threats) {
+            result.warnings.push({
+              type: 'google_safe_browsing',
+              severity: 'critical',
+              message: `Google Safe Browsing: ${threat.type.replace(/_/g, ' ').toLowerCase()}`
+            });
+          }
+        }
+      }
+    }
+
+    return result;
+  },
+
   // ==================== Profile Analyzer ====================
 
   /**

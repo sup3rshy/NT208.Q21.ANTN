@@ -207,6 +207,9 @@ const InstagramAPI = {
                   isVerified: u.is_verified || false,
                   profileUrl: `https://www.instagram.com/${u.username}/`,
                   profilePic: u.profile_pic_url || '',
+                  hasAnonymousProfilePic: !!u.has_anonymous_profile_picture,
+                  isPrivate: !!u.is_private,
+                  latestReelMedia: u.latest_reel_media || 0,
                   userId: key,
                 });
               }

@@ -154,6 +154,114 @@ const SocialShieldDiff = {
     });
   },
 
+  // ==================== Bot Detection ====================
+
+  /**
+   * Tính bot score cho một user (0-100, cao = nghi bot)
+   * @param {Object} user - user object từ snapshot
+   * @returns {Object} { score, reasons }
+   */
+  scoreBotLikelihood(user) {
+    let score = 0;
+    const reasons = [];
+
+    // 0. Verified account → chắc chắn không phải bot, return ngay
+    if (user.isVerified) {
+      return { score: 0, reasons: ['Verified account'], isLikelyBot: false };
+    }
+
+    // 1. has_anonymous_profile_picture — Instagram API field chính xác
+    if (user.hasAnonymousProfilePic === true) {
+      score += 25;
+      reasons.push('No profile picture');
+    }
+
+    // 2. Username patterns: many digits, random chars
+    const username = user.username || '';
+    const digitCount = (username.match(/\d/g) || []).length;
+    const digitRatio = digitCount / Math.max(username.length, 1);
+    if (digitRatio > 0.5 && username.length > 5) {
+      score += 20;
+      reasons.push('Username mostly digits');
+    }
+    // Pattern: word + many digits (e.g., user382947123)
+    if (/^[a-z]{2,8}\d{5,}$/i.test(username)) {
+      score += 15;
+      reasons.push('Generic username pattern');
+    }
+    // Excessive underscores/dots
+    const specialCount = (username.match(/[._]/g) || []).length;
+    if (specialCount >= 4) {
+      score += 10;
+      reasons.push('Many special characters in username');
+    }
+
+    // 4. No display name
+    if (!user.displayName || user.displayName.trim() === '') {
+      score += 15;
+      reasons.push('No display name');
+    }
+
+    // 5. Display name matches username exactly (lazy bot setup)
+    if (user.displayName && user.displayName.toLowerCase().replace(/\s/g, '') === username.toLowerCase()) {
+      score += 10;
+      reasons.push('Display name same as username');
+    }
+
+    // 6. Very short username (< 4 chars) with digits
+    if (username.length <= 3 && digitCount > 0) {
+      score += 10;
+      reasons.push('Very short username with digits');
+    }
+
+    return {
+      score: Math.min(score, 100),
+      reasons,
+      isLikelyBot: score >= 40
+    };
+  },
+
+  /**
+   * Phân tích bot trong danh sách users từ snapshot
+   * @param {Array} users - mảng user objects
+   * @returns {Object} { botCount, totalAnalyzed, botRatio, bots, summary }
+   */
+  analyzeBots(users) {
+    if (!users || users.length === 0) {
+      return { botCount: 0, totalAnalyzed: 0, botRatio: 0, bots: [], summary: 'No users to analyze' };
+    }
+
+    const analyzed = users.map(user => ({
+      ...user,
+      botAnalysis: this.scoreBotLikelihood(user)
+    }));
+
+    const bots = analyzed
+      .filter(u => u.botAnalysis.isLikelyBot)
+      .sort((a, b) => b.botAnalysis.score - a.botAnalysis.score);
+
+    const botRatio = bots.length / users.length;
+
+    let summary;
+    if (botRatio > 0.5) {
+      summary = 'High bot ratio detected - over 50% of accounts show bot-like patterns';
+    } else if (botRatio > 0.2) {
+      summary = 'Moderate bot presence - about ' + Math.round(botRatio * 100) + '% show bot patterns';
+    } else if (bots.length > 0) {
+      summary = bots.length + ' potential bot account(s) detected';
+    } else {
+      summary = 'No obvious bot accounts detected';
+    }
+
+    return {
+      botCount: bots.length,
+      totalAnalyzed: users.length,
+      botRatio: parseFloat((botRatio * 100).toFixed(1)),
+      bots: bots.slice(0, 50), // Top 50 most suspicious
+      summary
+    };
+  },
+
   // ==================== Private Helpers ====================
 
   _timeDiff(timestamp1, timestamp2) {

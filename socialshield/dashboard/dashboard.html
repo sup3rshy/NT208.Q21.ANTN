@@ -92,6 +92,23 @@
           </div>
         </div>
 
+        <!-- Timeline Chart -->
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Connection Timeline</h2>
+            <select class="ss-select" id="timeline-profile" style="width: auto; min-width: 180px;">
+              <option value="">Select profile...</option>
+            </select>
+          </div>
+          <div class="ss-card-body" id="timeline-container">
+            <canvas id="timeline-chart" height="280"></canvas>
+            <div class="ss-empty-state" id="timeline-empty">
+              <div class="ss-empty-icon">📈</div>
+              <p>Select a profile to view connection changes over time.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Recent Activity -->
         <div class="ss-card">
           <div class="ss-card-header">
@@ -310,6 +327,31 @@
 
         <div class="ss-card">
           <div class="ss-card-header">
+            <h2>Google Safe Browsing API</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">API Key</div>
+                <div class="ss-setting-desc">Enter your Google Safe Browsing API key for enhanced link checking. Get one free at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color: var(--accent);">Google Cloud Console</a></div>
+              </div>
+              <input type="password" class="ss-input" id="setting-sb-apikey" placeholder="AIza..." style="width: 260px;">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Enable Safe Browsing</div>
+                <div class="ss-setting-desc">Check links against Google's threat database (requires API key)</div>
+              </div>
+              <label class="ss-toggle">
+                <input type="checkbox" id="setting-sb-enabled">
+                <span class="ss-toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
             <h2>Data Management</h2>
           </div>
           <div class="ss-card-body">
@@ -333,6 +375,7 @@
     </main>
   </div>
 
+  <script src="../lib/chart.min.js"></script>
   <script src="../lib/storage.js"></script>
   <script src="../lib/diff.js"></script>
   <script src="../lib/scanner.js"></script>
