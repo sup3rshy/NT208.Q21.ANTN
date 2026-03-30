@@ -1,6 +1,6 @@
 /**
- * SocialShield - Instagram Content Script
- * Chạy trên instagram.com, cung cấp chức năng:
+ * SocialShield - Twitter/X Content Script
+ * Chạy trên x.com và twitter.com, cung cấp chức năng:
  * - Capture following/followers list
  * - Privacy scanning
  * - Link checking
@@ -9,24 +9,22 @@
   'use strict';
 
   // Tránh inject nhiều lần
-  if (window.__socialshield_loaded) return;
-  window.__socialshield_loaded = true;
+  if (window.__socialshield_twitter_loaded) return;
+  window.__socialshield_twitter_loaded = true;
 
-  const SS_Instagram = {
+  // Twitter public bearer token (embedded in Twitter's web app JS, not secret)
+  const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+  const SS_Twitter = {
     isCapturing: false,
     capturedUsers: [],
     captureType: null,
     captureProfile: null,
     fabElement: null,
     progressElement: null,
-    notificationTimeout: null,
 
     // ==================== Context Check ====================
 
-    /**
-     * Kiểm tra extension context còn hợp lệ không.
-     * Sau khi reload extension, content script cũ bị mất kết nối.
-     */
     isContextValid() {
       try {
         return !!chrome.runtime?.id;
@@ -35,17 +33,12 @@
       }
     },
 
-    /**
-     * Hiện thông báo yêu cầu refresh page khi context bị invalidated
-     */
     showRefreshNotice() {
-      // Xóa FAB cũ
       const fab = document.getElementById('ss-fab');
       if (fab) fab.remove();
       const progress = document.getElementById('ss-progress');
       if (progress) progress.remove();
 
-      // Hiện notice
       const notice = document.createElement('div');
       notice.id = 'ss-refresh-notice';
       notice.style.cssText = `
@@ -78,7 +71,7 @@
       this.injectNotificationArea();
       this.listenForMessages();
       this.observeUrlChanges();
-      console.log('[SocialShield] Instagram content script loaded');
+      console.log('[SocialShield] Twitter/X content script loaded');
     },
 
     // ==================== UI Injection ====================
@@ -119,13 +112,10 @@
       document.body.appendChild(fab);
       this.fabElement = fab;
 
-      // Toggle menu
       document.getElementById('ss-fab-toggle').addEventListener('click', () => {
-        const menu = document.getElementById('ss-fab-menu');
-        menu.classList.toggle('ss-show');
+        document.getElementById('ss-fab-menu').classList.toggle('ss-show');
       });
 
-      // Action handlers
       fab.querySelectorAll('.ss-fab-action').forEach(btn => {
         btn.addEventListener('click', (e) => {
           const action = e.currentTarget.dataset.action;
@@ -134,7 +124,6 @@
         });
       });
 
-      // Close menu khi click bên ngoài
       document.addEventListener('click', (e) => {
         if (!fab.contains(e.target)) {
           document.getElementById('ss-fab-menu').classList.remove('ss-show');
@@ -200,27 +189,27 @@
       this.showProgress(`Capturing ${type}...`, 0);
 
       try {
-        // Bước 1: Lấy User ID từ API
+        // Bước 1: Fetch user info để lấy expected count
         this.updateProgress('Fetching user info...');
-        const userId = await this.fetchUserId(profile);
-        if (!userId) {
-          this.notify(`Could not find user ID for @${profile}. Make sure you're logged in.`, 'error');
-          this.isCapturing = false;
-          this.hideProgress();
-          return;
-        }
-        console.log(`[SocialShield] User ID for @${profile}: ${userId}`);
+        const userInfo = await this.fetchUserInfo(profile);
+        const expectedCount = userInfo
+          ? (type === 'following' ? userInfo.friends_count : userInfo.followers_count)
+          : 0;
 
-        // Bước 2: Fetch following/followers qua API (có pagination)
+        if (userInfo) {
+          console.log(`[SocialShield] @${profile}: ${expectedCount} expected ${type}`);
+        }
+
+        // Bước 2: Fetch connections qua API
         this.updateProgress(`Fetching ${type} via API...`);
-        const users = await this.fetchConnectionsAPI(userId, type);
+        const users = await this.fetchConnectionsAPI(profile, type, expectedCount);
 
         this.capturedUsers = users;
 
         // Bước 3: Lưu snapshot
         if (this.capturedUsers.length > 0) {
           const snapshot = await SocialShieldStorage.saveSnapshot(
-            'instagram',
+            'twitter',
             profile,
             type,
             this.capturedUsers
@@ -243,7 +232,6 @@
 
       } catch (err) {
         console.error('[SocialShield] Capture error:', err);
-        // Kiểm tra nếu context bị invalidated giữa chừng
         if (!this.isContextValid() || (err.message && err.message.includes('context invalidated'))) {
           this.showRefreshNotice();
           return;
@@ -255,83 +243,73 @@
       }
     },
 
-    // ==================== Instagram API Methods ====================
+    // ==================== Twitter API Methods ====================
 
     /**
-     * Lấy CSRF token từ cookie (cần cho API requests)
+     * Lấy CSRF token từ cookie ct0
      */
     getCsrfToken() {
-      const match = document.cookie.match(/csrftoken=([^;]+)/);
+      const match = document.cookie.match(/ct0=([^;]+)/);
       return match ? match[1] : '';
     },
 
     /**
-     * Lấy User ID từ username qua API
+     * Build common headers cho Twitter API requests
      */
-    async fetchUserId(username) {
+    getApiHeaders() {
+      return {
+        'authorization': `Bearer ${TWITTER_BEARER}`,
+        'x-csrf-token': this.getCsrfToken(),
+        'x-twitter-active-user': 'yes',
+        'x-twitter-auth-type': 'OAuth2Session',
+      };
+    },
+
+    /**
+     * Lấy thông tin user từ screen_name qua Twitter internal API
+     */
+    async fetchUserInfo(screenName) {
       try {
         const res = await fetch(
-          `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+          `https://x.com/i/api/1.1/users/show.json?screen_name=${screenName}`,
           {
-            headers: {
-              'x-csrftoken': this.getCsrfToken(),
-              'x-ig-app-id': '936619743392459',
-              'x-requested-with': 'XMLHttpRequest',
-            },
+            headers: this.getApiHeaders(),
             credentials: 'include',
           }
         );
 
         if (!res.ok) {
-          console.error(`[SocialShield] Failed to fetch user ID: ${res.status}`);
+          console.error(`[SocialShield] Twitter user info failed: ${res.status}`);
           return null;
         }
 
-        const data = await res.json();
-        return data?.data?.user?.id || null;
+        return await res.json();
       } catch (err) {
-        console.error('[SocialShield] fetchUserId error:', err);
+        console.error('[SocialShield] fetchUserInfo error:', err);
         return null;
       }
     },
 
     /**
-     * Fetch following/followers list qua Instagram API với pagination + verification
-     * Retry nếu count chưa khớp expected count từ profile info
+     * Fetch following/followers list qua Twitter API v1.1 với cursor pagination
+     * API endpoint: followers/list.json hoặc friends/list.json
      */
-    async fetchConnectionsAPI(userId, type) {
-      // Lấy expected count từ profile info trước
-      let expectedCount = 0;
-      try {
-        const profileInfo = await chrome.runtime.sendMessage({
-          type: 'FETCH_PROFILE_INFO',
-          username: this.captureProfile
-        });
-        if (profileInfo) {
-          expectedCount = type === 'following' ? profileInfo.followingCount : profileInfo.followerCount;
-          console.log(`[SocialShield] Expected ${type} count: ${expectedCount}`);
-        }
-      } catch (err) {
-        console.warn('[SocialShield] Could not get expected count:', err);
-      }
-
-      const MAX_ATTEMPTS = 5;
-      // Map username → user object để merge kết quả giữa các attempts
+    async fetchConnectionsAPI(screenName, type, expectedCount) {
+      const MAX_ATTEMPTS = 3;
       const userMap = new Map();
-      const isFollowers = type === 'followers';
-      const perPage = isFollowers ? 25 : 200;
+      // followers/list.json cho followers, friends/list.json cho following
+      const endpoint = type === 'followers' ? 'followers' : 'friends';
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
           this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
-          await this.wait(4500 + Math.random() * 500);
+          await this.wait(3000 + Math.random() * 500);
         }
 
-        let maxId = null;
-        let hasMore = true;
+        let cursor = '-1';
         let page = 0;
 
-        while (hasMore && this.isCapturing) {
+        while (cursor !== '0' && this.isCapturing) {
           page++;
           this.updateProgress(
             attempt === 1
@@ -340,50 +318,27 @@
           );
 
           try {
-            // Cả followers và following đều dùng cursor-based (next_max_id từ response)
-            let url;
-            if (isFollowers) {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
-            } else {
-              url = `https://www.instagram.com/api/v1/friendships/${userId}/following/?count=${perPage}`;
-            }
-            if (maxId) {
-              url += `&max_id=${maxId}`;
-            }
+            const url = `https://x.com/i/api/1.1/${endpoint}/list.json?screen_name=${screenName}&count=200&cursor=${cursor}&skip_status=true&include_user_entities=false`;
 
             const res = await fetch(url, {
-              headers: {
-                'x-csrftoken': this.getCsrfToken(),
-                'x-ig-app-id': '936619743392459',
-                'x-requested-with': 'XMLHttpRequest',
-              },
+              headers: this.getApiHeaders(),
               credentials: 'include',
             });
 
-            // Phát hiện redirect đến login/challenge page
-            if (res.redirected) {
-              console.warn(`[SocialShield] Redirected to: ${res.url}`);
-              if (res.url.includes('/accounts/login') || res.url.includes('/challenge')) {
-                this.notify('Session expired. Please refresh the page and try again.', 'error');
-                hasMore = false;
-                break;
-              }
-            }
-
             if (!res.ok) {
-              console.error(`[SocialShield] API error: ${res.status}`);
+              console.error(`[SocialShield] Twitter API error: ${res.status}`);
               if (res.status === 401 || res.status === 403) {
-                this.notify('Authentication error. Please make sure you are logged into Instagram.', 'error');
+                this.notify('Authentication error. Make sure you are logged into Twitter/X.', 'error');
+              }
+              if (res.status === 429) {
+                this.notify('Rate limited by Twitter. Please wait a few minutes and try again.', 'warning');
               }
               break;
             }
 
-            // Kiểm tra response có phải JSON không (tránh parse HTML từ redirect)
             const contentType = res.headers.get('content-type');
             if (!contentType || !contentType.includes('json')) {
               console.error(`[SocialShield] Unexpected response type: ${contentType}`);
-              this.notify('Instagram returned unexpected response. Please refresh and try again.', 'error');
-              hasMore = false;
               break;
             }
 
@@ -391,33 +346,30 @@
 
             if (data.users && data.users.length > 0) {
               for (const u of data.users) {
-                // Dedup theo userId (pk) thay vì username
-                const key = String(u.pk || u.pk_id || '');
+                const key = String(u.id_str || u.id || '');
                 if (key && !userMap.has(key)) {
                   userMap.set(key, {
-                    username: u.username,
-                    displayName: u.full_name || '',
-                    isVerified: u.is_verified || false,
-                    profileUrl: `https://www.instagram.com/${u.username}/`,
-                    profilePic: u.profile_pic_url || '',
-                    hasAnonymousProfilePic: !!u.has_anonymous_profile_picture,
-                    isPrivate: !!u.is_private,
-                    latestReelMedia: u.latest_reel_media || 0,
+                    username: u.screen_name,
+                    displayName: u.name || '',
+                    isVerified: u.verified || u.is_blue_verified || false,
+                    profileUrl: `https://x.com/${u.screen_name}`,
+                    profilePic: u.profile_image_url_https || '',
+                    hasAnonymousProfilePic: !!u.default_profile_image,
+                    isPrivate: !!u.protected,
+                    followersCount: u.followers_count || 0,
+                    followingCount: u.friends_count || 0,
+                    statusesCount: u.statuses_count || 0,
                     userId: key,
                   });
                 }
               }
             }
 
-            // Cursor-based: dừng khi không còn next_max_id hoặc big_list = false
-            if (data.next_max_id && data.big_list !== false) {
-              maxId = data.next_max_id;
-            } else {
-              hasMore = false;
-            }
+            // Cursor-based pagination: dừng khi next_cursor_str = "0"
+            cursor = data.next_cursor_str || '0';
 
-            if (hasMore) {
-              await this.wait(4000 + Math.random() * 1000);
+            if (cursor !== '0') {
+              await this.wait(2000 + Math.random() * 1000);
             }
           } catch (err) {
             console.error(`[SocialShield] fetchConnectionsAPI error on page ${page}:`, err);
@@ -425,7 +377,6 @@
           }
         }
 
-        // Kiểm tra count đã khớp expected chưa
         console.log(`[SocialShield] Attempt ${attempt}: fetched ${userMap.size}/${expectedCount} ${type}`);
         if (expectedCount > 0 && userMap.size >= expectedCount) {
           console.log(`[SocialShield] Count verified: ${userMap.size} >= ${expectedCount}`);
@@ -442,14 +393,13 @@
     },
 
     async autoCompare(profile, type, newSnapshot) {
-      const snapshots = await SocialShieldStorage.getSnapshots('instagram', profile, type);
+      const snapshots = await SocialShieldStorage.getSnapshots('twitter', profile, type);
       if (snapshots.length < 2) return;
 
       const prevSnapshot = snapshots[snapshots.length - 2];
       const diff = SocialShieldDiff.compare(prevSnapshot, newSnapshot);
       const alerts = SocialShieldDiff.detectSuspicious(diff);
 
-      // Bot detection on new followers/following
       if (diff.added.length > 0) {
         const botAnalysis = SocialShieldDiff.analyzeBots(diff.added);
         if (botAnalysis.botRatio > 30) {
@@ -467,7 +417,7 @@
         for (const alert of alerts) {
           await SocialShieldStorage.saveAlert({
             ...alert,
-            platform: 'instagram',
+            platform: 'twitter',
             username: profile,
             snapshotType: type
           });
@@ -478,7 +428,6 @@
         );
       }
 
-      // Hiện quick diff summary
       if (diff.summary.addedCount > 0 || diff.summary.removedCount > 0) {
         const parts = [];
         if (diff.summary.addedCount > 0) parts.push(`+${diff.summary.addedCount} new`);
@@ -493,17 +442,30 @@
       const profile = this.getCurrentProfile();
       this.notify('Scanning profile for privacy risks...', 'info');
 
-      // Thu thập text từ trang profile
-      const bioSection = document.querySelector('header section') ||
-        document.querySelector('[class*="Header"]') ||
-        document.querySelector('main header');
-
+      // Lấy bio text từ DOM - Twitter dùng data-testid attributes
       let bioText = '';
-      if (bioSection) {
-        bioText = bioSection.innerText || bioSection.textContent || '';
+
+      // Try data-testid selectors (Twitter/X React app)
+      const bioEl = document.querySelector('[data-testid="UserDescription"]');
+      if (bioEl) {
+        bioText = bioEl.innerText || bioEl.textContent || '';
       }
 
-      // Fallback: lấy tất cả text trong main area
+      // Fallback: lấy text từ profile header area
+      if (!bioText) {
+        const headerEl = document.querySelector('[data-testid="UserProfileHeader_Items"]') ||
+          document.querySelector('[data-testid="UserName"]')?.closest('div[class]');
+        if (headerEl) {
+          bioText = headerEl.innerText || '';
+        }
+      }
+
+      // Thêm info từ profile header items (location, website, join date)
+      const headerItems = document.querySelector('[data-testid="UserProfileHeader_Items"]');
+      if (headerItems) {
+        bioText += '\n' + (headerItems.innerText || '');
+      }
+
       if (!bioText) {
         const main = document.querySelector('main') || document.body;
         bioText = main.innerText.substring(0, 5000);
@@ -511,8 +473,29 @@
 
       const findings = SocialShieldScanner.scanPrivacy(bioText);
 
-      // Thu thập thêm thông tin profile cho phân tích tổng hợp
-      const profileData = await this.extractProfileData();
+      // Lấy thêm thông tin profile qua API
+      let profileData = {
+        externalUrl: null, isPrivate: false,
+        followerCount: 0, followingCount: 0, postCount: 0
+      };
+
+      if (profile) {
+        try {
+          const info = await this.fetchUserInfo(profile);
+          if (info) {
+            profileData = {
+              externalUrl: info.url || info.entities?.url?.urls?.[0]?.expanded_url || null,
+              isPrivate: !!info.protected,
+              followerCount: info.followers_count || 0,
+              followingCount: info.friends_count || 0,
+              postCount: info.statuses_count || 0,
+            };
+          }
+        } catch (err) {
+          console.error('[SocialShield] extractProfileData error:', err);
+        }
+      }
+
       const analysis = SocialShieldScanner.analyzeProfile({
         bio: bioText,
         externalUrl: profileData.externalUrl,
@@ -522,12 +505,10 @@
         postCount: profileData.postCount
       });
 
-      // Lưu kết quả
       if (profile) {
-        await SocialShieldStorage.savePrivacyScan('instagram', profile, analysis.privacyFindings);
+        await SocialShieldStorage.savePrivacyScan('twitter', profile, analysis.privacyFindings);
       }
 
-      // Hiển thị kết quả
       if (analysis.privacyFindings.length === 0) {
         this.notify('No privacy risks detected on this profile.', 'success');
       } else {
@@ -539,50 +520,10 @@
         );
       }
 
-      // Gửi kết quả đến popup/background
       chrome.runtime.sendMessage({
         type: 'PRIVACY_SCAN_COMPLETE',
         data: analysis
       });
-    },
-
-    /**
-     * Lấy profile data qua Background API (stable, không phụ thuộc DOM)
-     */
-    async extractProfileData() {
-      const profile = this.getCurrentProfile();
-      if (!profile) {
-        return {
-          externalUrl: null, isPrivate: false,
-          followerCount: 0, followingCount: 0, postCount: 0
-        };
-      }
-
-      try {
-        // Gọi background service worker để fetch profile info qua API
-        const info = await chrome.runtime.sendMessage({
-          type: 'FETCH_PROFILE_INFO',
-          username: profile
-        });
-
-        if (info) {
-          return {
-            externalUrl: info.externalUrl,
-            isPrivate: info.isPrivate,
-            followerCount: info.followerCount,
-            followingCount: info.followingCount,
-            postCount: info.postCount,
-          };
-        }
-      } catch (err) {
-        console.error('[SocialShield] extractProfileData API error:', err);
-      }
-
-      // Fallback: return zeros nếu API fail
-      return {
-        externalUrl: null, isPrivate: false,
-        followerCount: 0, followingCount: 0, postCount: 0
-      };
     },
 
     // ==================== Link Scan ====================
@@ -590,7 +531,6 @@
     async runLinkScan() {
       this.notify('Scanning links on this page...', 'info');
 
-      // Check if Safe Browsing API is enabled
       let sbApiKey = null;
       try {
         const settings = await SocialShieldStorage.getSettings();
@@ -599,7 +539,6 @@
         }
       } catch (e) { /* ignore */ }
 
-      // If Safe Browsing enabled, use checkLinkFull for each external link
       let results;
       if (sbApiKey) {
         this.notify('Checking links with Google Safe Browsing...', 'info');
@@ -628,7 +567,6 @@
           unsafe.length > 0 ? 'error' : 'warning'
         );
 
-        // Highlight unsafe links trên trang
         for (const result of unsafe) {
           if (result.element) {
             result.element.style.outline = '2px solid #ef4444';
@@ -647,11 +585,12 @@
     // ==================== URL Observer ====================
 
     getCurrentProfile() {
-      const match = window.location.pathname.match(/^\/([a-zA-Z0-9._]{1,30})\/?$/);
+      const match = window.location.pathname.match(/^\/([a-zA-Z0-9_]{1,15})\/?$/);
       if (match) {
         const nonProfilePaths = new Set([
-          'explore', 'reels', 'direct', 'accounts', 'stories',
-          'p', 'tv', 'reel', 'tags', 'locations', 'nametag'
+          'home', 'explore', 'search', 'notifications', 'messages',
+          'i', 'settings', 'compose', 'hashtag', 'lists', 'login',
+          'signup', 'tos', 'privacy', 'jobs', 'about'
         ]);
         if (!nonProfilePaths.has(match[1])) return match[1];
       }
@@ -671,7 +610,6 @@
 
     onUrlChange() {
       const profile = this.getCurrentProfile();
-      // Update FAB visibility
       chrome.runtime.sendMessage({
         type: 'URL_CHANGED',
         data: {
@@ -694,7 +632,8 @@
               url: location.href,
               profile: this.getCurrentProfile(),
               isProfilePage: !!this.getCurrentProfile(),
-              isCapturing: this.isCapturing
+              isCapturing: this.isCapturing,
+              platform: 'twitter'
             });
             return true;
 
@@ -751,7 +690,6 @@
 
       area.appendChild(notification);
 
-      // Auto-remove after 6 seconds
       setTimeout(() => {
         if (notification.parentElement) {
           notification.classList.add('ss-notification-exit');
@@ -760,7 +698,7 @@
       }, 6000);
     },
 
-    showProgress(text, percentage) {
+    showProgress(text) {
       let progress = document.getElementById('ss-progress');
       if (!progress) {
         progress = document.createElement('div');
@@ -797,15 +735,15 @@
 
     // ==================== Utilities ====================
 
-    wait(ms) {  
+    wait(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
     }
   };
 
   // ==================== Initialize ====================
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => SS_Instagram.init());
+    document.addEventListener('DOMContentLoaded', () => SS_Twitter.init());
   } else {
-    SS_Instagram.init();
+    SS_Twitter.init();
   }
 })();

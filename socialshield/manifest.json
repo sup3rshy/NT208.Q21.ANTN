@@ -8,10 +8,13 @@
     "activeTab",
     "notifications",
     "alarms",
-    "cookies"
+    "cookies",
+    "scripting"
   ],
   "host_permissions": [
     "https://www.instagram.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
     "https://safebrowsing.googleapis.com/*"
   ],
   "background": {
@@ -22,6 +25,12 @@
       "matches": ["https://www.instagram.com/*"],
       "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "content/instagram.js"],
       "css": ["content/instagram.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "content/twitter.js"],
+      "css": ["content/twitter.css"],
       "run_at": "document_idle"
     }
   ],

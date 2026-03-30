@@ -52,11 +52,15 @@
         links: document.getElementById('btn-link-scan')
       };
 
-      const isInstagram = this.currentTab?.url?.includes('instagram.com');
+      const url = this.currentTab?.url || '';
+      const isInstagram = url.includes('instagram.com');
+      const isTwitter = url.includes('x.com') || url.includes('twitter.com');
+      const isSupportedPlatform = isInstagram || isTwitter;
+      const platformName = isTwitter ? 'Twitter/X' : 'Instagram';
 
-      if (!isInstagram) {
+      if (!isSupportedPlatform) {
         statusDot.className = 'ss-status-dot ss-dot-inactive';
-        statusText.textContent = 'Navigate to Instagram to use SocialShield';
+        statusText.textContent = 'Navigate to Instagram or Twitter/X to use SocialShield';
         profileSection.style.display = 'none';
         Object.values(buttons).forEach(btn => btn.disabled = true);
         return;
@@ -64,7 +68,7 @@
 
       if (this.pageInfo?.isProfilePage) {
         statusDot.className = 'ss-status-dot ss-dot-active';
-        statusText.textContent = 'Active on Instagram profile';
+        statusText.textContent = `Active on ${platformName} profile`;
         profileSection.style.display = 'block';
         document.getElementById('ss-profile-username').textContent = `@${this.pageInfo.profile}`;
 
@@ -79,10 +83,10 @@
         }
       } else {
         statusDot.className = 'ss-status-dot ss-dot-active';
-        statusText.textContent = 'Active on Instagram (not on a profile page)';
+        statusText.textContent = `Active on ${platformName} (not on a profile page)`;
         profileSection.style.display = 'none';
 
-        // Chỉ enable link scan (hoạt động trên mọi trang Instagram)
+        // Chỉ enable link scan (hoạt động trên mọi trang)
         buttons.following.disabled = true;
         buttons.followers.disabled = true;
         buttons.privacy.disabled = true;

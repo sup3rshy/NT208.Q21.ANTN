@@ -245,15 +245,156 @@ const InstagramAPI = {
   }
 };
 
+// ==================== Twitter/X API (Background) ====================
+
+const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+const TwitterAPI = {
+  async getCookies() {
+    const cookies = await chrome.cookies.getAll({ domain: '.x.com' });
+    const cookieMap = {};
+    for (const c of cookies) {
+      cookieMap[c.name] = c.value;
+    }
+    return cookieMap;
+  },
+
+  async getCsrfToken() {
+    const cookie = await chrome.cookies.get({ url: 'https://x.com', name: 'ct0' });
+    return cookie?.value || '';
+  },
+
+  async isLoggedIn() {
+    const authToken = await chrome.cookies.get({ url: 'https://x.com', name: 'auth_token' });
+    return !!authToken?.value;
+  },
+
+  async buildCookieHeader() {
+    const cookies = await this.getCookies();
+    return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  },
+
+  getHeaders(csrfToken, cookieHeader) {
+    return {
+      'authorization': `Bearer ${TWITTER_BEARER}`,
+      'x-csrf-token': csrfToken,
+      'x-twitter-active-user': 'yes',
+      'x-twitter-auth-type': 'OAuth2Session',
+      'Cookie': cookieHeader,
+    };
+  },
+
+  async fetchUserInfo(screenName) {
+    try {
+      const csrfToken = await this.getCsrfToken();
+      const cookieHeader = await this.buildCookieHeader();
+
+      const res = await fetch(
+        `https://x.com/i/api/1.1/users/show.json?screen_name=${screenName}`,
+        { headers: this.getHeaders(csrfToken, cookieHeader) }
+      );
+
+      if (!res.ok) {
+        console.error(`[SocialShield BG] Twitter fetchUserInfo failed: ${res.status}`);
+        return null;
+      }
+
+      return await res.json();
+    } catch (err) {
+      console.error('[SocialShield BG] Twitter fetchUserInfo error:', err);
+      return null;
+    }
+  },
+
+  async fetchConnections(screenName, type, expectedCount = 0) {
+    const MAX_ATTEMPTS = 3;
+    const userMap = new Map();
+    const endpoint = type === 'followers' ? 'followers' : 'friends';
+
+    const csrfToken = await this.getCsrfToken();
+    const cookieHeader = await this.buildCookieHeader();
+    const headers = this.getHeaders(csrfToken, cookieHeader);
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (attempt > 1) {
+        await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
+      }
+
+      let cursor = '-1';
+      let page = 0;
+
+      while (cursor !== '0') {
+        page++;
+        try {
+          const url = `https://x.com/i/api/1.1/${endpoint}/list.json?screen_name=${screenName}&count=200&cursor=${cursor}&skip_status=true&include_user_entities=false`;
+
+          const res = await fetch(url, { headers });
+
+          if (!res.ok) {
+            console.error(`[SocialShield BG] Twitter API error: ${res.status}`);
+            break;
+          }
+
+          const contentType = res.headers.get('content-type');
+          if (!contentType || !contentType.includes('json')) {
+            console.error(`[SocialShield BG] Unexpected response type: ${contentType}`);
+            break;
+          }
+
+          const data = await res.json();
+
+          if (data.users && data.users.length > 0) {
+            for (const u of data.users) {
+              const key = String(u.id_str || u.id || '');
+              if (key && !userMap.has(key)) {
+                userMap.set(key, {
+                  username: u.screen_name,
+                  displayName: u.name || '',
+                  isVerified: u.verified || u.is_blue_verified || false,
+                  profileUrl: `https://x.com/${u.screen_name}`,
+                  profilePic: u.profile_image_url_https || '',
+                  hasAnonymousProfilePic: !!u.default_profile_image,
+                  isPrivate: !!u.protected,
+                  followersCount: u.followers_count || 0,
+                  followingCount: u.friends_count || 0,
+                  statusesCount: u.statuses_count || 0,
+                  userId: key,
+                });
+              }
+            }
+          }
+
+          cursor = data.next_cursor_str || '0';
+
+          if (cursor !== '0') {
+            await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
+          }
+        } catch (err) {
+          console.error(`[SocialShield BG] Twitter fetchConnections page ${page} error:`, err);
+          break;
+        }
+      }
+
+      console.log(`[SocialShield BG] Twitter attempt ${attempt}: fetched ${userMap.size}/${expectedCount} ${type}`);
+      if (expectedCount > 0 && userMap.size >= expectedCount) break;
+    }
+
+    const users = Array.from(userMap.values());
+    console.log(`[SocialShield BG] Twitter final ${type} count: ${users.length} (expected: ${expectedCount})`);
+    return users;
+  }
+};
+
 // ==================== Auto Capture ====================
 
 async function runAutoCapture() {
   console.log('[SocialShield] Auto-capture triggered');
 
-  // Kiểm tra đã login chưa
-  const loggedIn = await InstagramAPI.isLoggedIn();
-  if (!loggedIn) {
-    console.log('[SocialShield] Not logged into Instagram, skipping auto-capture');
+  // Kiểm tra login status cho cả hai nền tảng
+  const igLoggedIn = await InstagramAPI.isLoggedIn();
+  const twLoggedIn = await TwitterAPI.isLoggedIn();
+  if (!igLoggedIn && !twLoggedIn) {
+    console.log('[SocialShield] Not logged into any platform, skipping auto-capture');
     return;
   }
 
@@ -288,95 +429,39 @@ async function runAutoCapture() {
 
   for (const [, profile] of Object.entries(profileMap)) {
     try {
-      const profileInfo = await InstagramAPI.fetchProfileInfo(profile.username);
-      if (!profileInfo) {
-        console.warn(`[SocialShield] Could not get profile info for @${profile.username}`);
-        continue;
-      }
-      const userId = profileInfo.id;
-
-      for (const type of profile.types) {
-        console.log(`[SocialShield] Auto-capturing ${type} for @${profile.username}...`);
-        const expectedCount = type === 'following' ? profileInfo.followingCount : profileInfo.followerCount;
-        const users = await InstagramAPI.fetchConnections(userId, type, expectedCount);
-
-        if (users.length > 0) {
-          // Lưu snapshot - replicate SocialShieldStorage.saveSnapshot logic
-          const snapshot = {
-            id: `snap_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-            platform: profile.platform,
-            username: profile.username,
-            type,
-            data: users,
-            count: users.length,
-            timestamp: new Date().toISOString(),
-            createdAt: Date.now(),
-            isAutoCapture: true,
-          };
-
-          const storageKey = `snapshots_${profile.platform}_${profile.username}_${type}`;
-          const existing = (await chrome.storage.local.get(storageKey))[storageKey] || [];
-          existing.push(snapshot);
-          await chrome.storage.local.set({ [storageKey]: existing });
-
-          // Auto-compare với snapshot trước
-          if (existing.length >= 2) {
-            const prevSnap = existing[existing.length - 2];
-            const diffResult = computeDiff(prevSnap, snapshot);
-
-            if (diffResult.addedCount > 0 || diffResult.removedCount > 0) {
-              // Lưu alert nếu có thay đổi đáng kể
-              const alerts = (await chrome.storage.local.get('alerts')).alerts || [];
-
-              if (diffResult.addedCount >= (settings.suspiciousThreshold?.massFollow || 20)) {
-                alerts.unshift({
-                  id: `alert_${Date.now()}`,
-                  type: 'mass_follow',
-                  severity: 'warning',
-                  title: 'Mass Follow Detected (Auto)',
-                  message: `${diffResult.addedCount} new ${type} for @${profile.username}`,
-                  platform: profile.platform,
-                  username: profile.username,
-                  snapshotType: type,
-                  read: false,
-                  timestamp: new Date().toISOString(),
-                });
-              }
-
-              if (diffResult.removedCount >= (settings.suspiciousThreshold?.massUnfollow || 10)) {
-                alerts.unshift({
-                  id: `alert_${Date.now()}_unfollow`,
-                  type: 'mass_unfollow',
-                  severity: 'danger',
-                  title: 'Mass Unfollow Detected (Auto)',
-                  message: `${diffResult.removedCount} ${type} removed for @${profile.username}`,
-                  platform: profile.platform,
-                  username: profile.username,
-                  snapshotType: type,
-                  read: false,
-                  timestamp: new Date().toISOString(),
-                });
-              }
-
-              if (alerts.length > 100) alerts.length = 100;
-              await chrome.storage.local.set({ alerts });
-
-              // Notification
-              chrome.notifications.create(`auto-${snapshot.id}`, {
-                type: 'basic',
-                iconUrl: 'icons/icon128.png',
-                title: `SocialShield - @${profile.username}`,
-                message: `Auto-capture: +${diffResult.addedCount} / -${diffResult.removedCount} ${type}`,
-                priority: 1,
-              });
-            }
-          }
-
-          capturedCount++;
+      // Xác định API phù hợp theo platform
+      if (profile.platform === 'twitter') {
+        if (!twLoggedIn) continue;
+        const twInfo = await TwitterAPI.fetchUserInfo(profile.username);
+        if (!twInfo) {
+          console.warn(`[SocialShield] Could not get Twitter info for @${profile.username}`);
+          continue;
         }
 
-        // Delay giữa các captures
-        await new Promise(r => setTimeout(r, 2000));
+        for (const type of profile.types) {
+          console.log(`[SocialShield] Auto-capturing ${type} for @${profile.username} (twitter)...`);
+          const expectedCount = type === 'following' ? twInfo.friends_count : twInfo.followers_count;
+          const users = await TwitterAPI.fetchConnections(profile.username, type, expectedCount);
+          capturedCount += await saveAutoCaptureSnapshot(profile, type, users, settings);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      } else {
+        // Instagram auto-capture (default)
+        if (!igLoggedIn) continue;
+        const profileInfo = await InstagramAPI.fetchProfileInfo(profile.username);
+        if (!profileInfo) {
+          console.warn(`[SocialShield] Could not get profile info for @${profile.username}`);
+          continue;
+        }
+        const userId = profileInfo.id;
+
+        for (const type of profile.types) {
+          console.log(`[SocialShield] Auto-capturing ${type} for @${profile.username}...`);
+          const expectedCount = type === 'following' ? profileInfo.followingCount : profileInfo.followerCount;
+          const users = await InstagramAPI.fetchConnections(userId, type, expectedCount);
+          capturedCount += await saveAutoCaptureSnapshot(profile, type, users, settings);
+          await new Promise(r => setTimeout(r, 2000));
+        }
       }
     } catch (err) {
       console.error(`[SocialShield] Auto-capture error for @${profile.username}:`, err);
@@ -384,6 +469,84 @@ async function runAutoCapture() {
   }
 
   console.log(`[SocialShield] Auto-capture complete: ${capturedCount} snapshots saved`);
+}
+
+/**
+ * Lưu snapshot từ auto-capture, so sánh và tạo alerts
+ * @returns {number} 1 nếu lưu thành công, 0 nếu không
+ */
+async function saveAutoCaptureSnapshot(profile, type, users, settings) {
+  if (users.length === 0) return 0;
+
+  const snapshot = {
+    id: `snap_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    platform: profile.platform,
+    username: profile.username,
+    type,
+    data: users,
+    count: users.length,
+    timestamp: new Date().toISOString(),
+    createdAt: Date.now(),
+    isAutoCapture: true,
+  };
+
+  const storageKey = `snapshots_${profile.platform}_${profile.username}_${type}`;
+  const existing = (await chrome.storage.local.get(storageKey))[storageKey] || [];
+  existing.push(snapshot);
+  await chrome.storage.local.set({ [storageKey]: existing });
+
+  // Auto-compare với snapshot trước
+  if (existing.length >= 2) {
+    const prevSnap = existing[existing.length - 2];
+    const diffResult = computeDiff(prevSnap, snapshot);
+
+    if (diffResult.addedCount > 0 || diffResult.removedCount > 0) {
+      const alerts = (await chrome.storage.local.get('alerts')).alerts || [];
+
+      if (diffResult.addedCount >= (settings.suspiciousThreshold?.massFollow || 20)) {
+        alerts.unshift({
+          id: `alert_${Date.now()}`,
+          type: 'mass_follow',
+          severity: 'warning',
+          title: 'Mass Follow Detected (Auto)',
+          message: `${diffResult.addedCount} new ${type} for @${profile.username}`,
+          platform: profile.platform,
+          username: profile.username,
+          snapshotType: type,
+          read: false,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (diffResult.removedCount >= (settings.suspiciousThreshold?.massUnfollow || 10)) {
+        alerts.unshift({
+          id: `alert_${Date.now()}_unfollow`,
+          type: 'mass_unfollow',
+          severity: 'danger',
+          title: 'Mass Unfollow Detected (Auto)',
+          message: `${diffResult.removedCount} ${type} removed for @${profile.username}`,
+          platform: profile.platform,
+          username: profile.username,
+          snapshotType: type,
+          read: false,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (alerts.length > 100) alerts.length = 100;
+      await chrome.storage.local.set({ alerts });
+
+      chrome.notifications.create(`auto-${snapshot.id}`, {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: `SocialShield - @${profile.username}`,
+        message: `Auto-capture: +${diffResult.addedCount} / -${diffResult.removedCount} ${type}`,
+        priority: 1,
+      });
+    }
+  }
+
+  return 1;
 }
 
 /**
@@ -494,6 +657,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
+    case 'FETCH_TWITTER_USER_INFO':
+      TwitterAPI.fetchUserInfo(message.screenName).then(info => {
+        sendResponse(info);
+      }).catch(err => {
+        console.error('[SocialShield] FETCH_TWITTER_USER_INFO error:', err);
+        sendResponse(null);
+      });
+      return true;
+
     case 'UPDATE_AUTO_CAPTURE':
       setupAutoCaptureAlarm().then(() => {
         sendResponse({ ok: true });
@@ -579,7 +751,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // ==================== Tab Events ====================
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url?.includes('instagram.com')) {
+  if (changeInfo.status === 'complete' && (
+    tab.url?.includes('instagram.com') ||
+    tab.url?.includes('x.com') ||
+    tab.url?.includes('twitter.com')
+  )) {
     chrome.action.setBadgeText({ text: '', tabId });
   }
 });

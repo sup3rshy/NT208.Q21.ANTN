@@ -148,17 +148,19 @@ const SocialShieldScanner = {
         result.score -= 15;
       }
 
-      // Check for suspicious Instagram-like domains (typosquatting)
+      // Check for suspicious social media typosquatting domains
       const suspiciousDomains = [
         /instagr[^a]m/i, /1nstagram/i, /instagram\d/i,
-        /instag\.ram/i, /lnstagram/i, /instagran/i
+        /instag\.ram/i, /lnstagram/i, /instagran/i,
+        /tw[^i]tter/i, /twltter/i, /twitter\d/i, /twiiter/i,
+        /x\.com\./i,
       ];
       for (const pattern of suspiciousDomains) {
         if (pattern.test(parsed.hostname)) {
           result.warnings.push({
             type: 'typosquatting',
             severity: 'high',
-            message: 'Possible typosquatting attack - fake domain mimicking Instagram'
+            message: 'Possible typosquatting attack - fake domain mimicking social media'
           });
           result.safe = false;
           result.score -= 40;
@@ -268,8 +270,10 @@ const SocialShieldScanner = {
     for (const link of links) {
       const href = link.href;
       if (!href || href.startsWith('javascript:') || seen.has(href)) continue;
-      // Bỏ qua links nội bộ Instagram
+      // Bỏ qua links nội bộ Instagram và Twitter/X
       if (href.startsWith('https://www.instagram.com/') || href.startsWith('https://instagram.com/')) continue;
+      if (href.startsWith('https://x.com/') || href.startsWith('https://twitter.com/')) continue;
+      if (href.startsWith('https://t.co/')) continue;
 
       seen.add(href);
       const result = this.checkLink(href);

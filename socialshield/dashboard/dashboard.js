@@ -272,7 +272,7 @@
         container.innerHTML = `
           <div class="ss-empty-state">
             <div class="ss-empty-icon">📸</div>
-            <p>No snapshots yet. Go to an Instagram profile and click Capture.</p>
+            <p>No snapshots yet. Go to an Instagram or Twitter/X profile and click Capture.</p>
           </div>
         `;
         return;
@@ -368,9 +368,10 @@
             const botTag = bot.isLikelyBot
               ? `<span style="background: rgba(239,68,68,0.15); color: #ef4444; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px;" title="${bot.reasons.join(', ')}">BOT ${bot.score}%</span>`
               : '';
+            const userUrl = user.profileUrl || `https://www.instagram.com/${user.username}/`;
             return `
               <div class="ss-user-item" ${bot.isLikelyBot ? 'style="border-left: 2px solid #ef4444; padding-left: 8px;"' : ''}>
-                <a class="ss-user-link" href="https://www.instagram.com/${user.username}/" target="_blank">
+                <a class="ss-user-link" href="${userUrl}" target="_blank">
                   @${this.escapeHtml(user.username)}
                 </a>
                 ${user.isVerified ? '<span class="ss-verified-badge">✓</span>' : ''}
@@ -558,12 +559,14 @@
               ➕ New (${diff.added.length})
             </div>
             <div class="ss-user-list">
-              ${diff.added.map(u => `
+              ${diff.added.map(u => {
+                const addedUrl = u.profileUrl || `https://www.instagram.com/${u.username}/`;
+                return `
                 <div class="ss-user-item ss-user-item-added">
-                  <a class="ss-user-link" href="https://www.instagram.com/${u.username}/" target="_blank">@${this.escapeHtml(u.username)}</a>
+                  <a class="ss-user-link" href="${addedUrl}" target="_blank">@${this.escapeHtml(u.username)}</a>
                   ${u.displayName ? `<span class="ss-user-display-name">${this.escapeHtml(u.displayName)}</span>` : ''}
                 </div>
-              `).join('')}
+              `;}).join('')}
             </div>
           </div>
         ` : ''}
@@ -574,12 +577,14 @@
               ➖ Removed (${diff.removed.length})
             </div>
             <div class="ss-user-list">
-              ${diff.removed.map(u => `
+              ${diff.removed.map(u => {
+                const removedUrl = u.profileUrl || `https://www.instagram.com/${u.username}/`;
+                return `
                 <div class="ss-user-item ss-user-item-removed">
-                  <a class="ss-user-link" href="https://www.instagram.com/${u.username}/" target="_blank">@${this.escapeHtml(u.username)}</a>
+                  <a class="ss-user-link" href="${removedUrl}" target="_blank">@${this.escapeHtml(u.username)}</a>
                   ${u.displayName ? `<span class="ss-user-display-name">${this.escapeHtml(u.displayName)}</span>` : ''}
                 </div>
-              `).join('')}
+              `;}).join('')}
             </div>
           </div>
         ` : ''}
@@ -607,7 +612,7 @@
         container.innerHTML = `
           <div class="ss-empty-state">
             <div class="ss-empty-icon">🔍</div>
-            <p>No privacy scans yet. Run a scan on an Instagram profile.</p>
+            <p>No privacy scans yet. Run a scan on a social media profile.</p>
           </div>
         `;
         return;
