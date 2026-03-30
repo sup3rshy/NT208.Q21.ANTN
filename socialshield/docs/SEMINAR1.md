@@ -11,7 +11,6 @@
 | Nhóm | Mô tả | Nhu cầu chính |
 |------|--------|----------------|
 | **Người dùng cá nhân** | Người dùng Instagram phổ thông muốn theo dõi biến động tài khoản | Biết ai follow/unfollow mình, bảo vệ quyền riêng tư |
-| **Content Creator / Influencer** | Người có lượng follower lớn, cần quản lý community | Phát hiện bot, theo dõi tăng trưởng, cảnh báo bất thường |
 | **Security Researcher** | Người nghiên cứu bảo mật, phân tích hành vi MXH | Phân tích pattern, phát hiện tấn công, thu thập dữ liệu |
 | **Admin (quản trị)** | Quản trị viên hệ thống extension | Quản lý settings, export dữ liệu, xem thống kê |
 
