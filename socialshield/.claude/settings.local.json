@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(/tmp/commit_msg.txt:*)",
+      "Read(//tmp/**)"
+    ]
+  }
+}

@@ -352,6 +352,38 @@
 
         <div class="ss-card">
           <div class="ss-card-header">
+            <h2>AI Text Analysis</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Server URL</div>
+                <div class="ss-setting-desc">URL of the SocialShield AI server (default: http://localhost:3456)</div>
+              </div>
+              <input type="text" class="ss-input" id="setting-ai-url" placeholder="http://localhost:3456" style="width: 260px;">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Enable AI Analysis</div>
+                <div class="ss-setting-desc">Use AI to analyze bio text for scam/phishing patterns (falls back to rules if unavailable)</div>
+              </div>
+              <label class="ss-toggle">
+                <input type="checkbox" id="setting-ai-enabled">
+                <span class="ss-toggle-slider"></span>
+              </label>
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Test Connection</div>
+                <div class="ss-setting-desc">Verify that the AI server is running and reachable</div>
+              </div>
+              <button class="ss-btn ss-btn-sm" id="btn-test-ai">Test</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
             <h2>Data Management</h2>
           </div>
           <div class="ss-card-body">
@@ -379,6 +411,7 @@
   <script src="../lib/storage.js"></script>
   <script src="../lib/diff.js"></script>
   <script src="../lib/scanner.js"></script>
+  <script src="../lib/text-analyzer.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>

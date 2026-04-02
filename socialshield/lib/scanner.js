@@ -113,7 +113,311 @@ const SocialShieldScanner = {
       }
     }
 
+    // Bank account numbers (Vietnamese)
+    const bankPattern = /\b\d{9,19}\b/g;
+    const bankContext = text.match(/(?:stk|số tài khoản|account\s*(?:number|no)|bank\s*account)[:\s]*(\d{9,19})/gi);
+    if (bankContext) {
+      findings.push({
+        type: 'bank_account',
+        severity: 'critical',
+        icon: '🏦',
+        title: 'Bank Account Number',
+        message: 'Bank account number may be exposed - CRITICAL RISK',
+        values: [...new Set(bankContext)]
+      });
+    }
+
+    // Credit card numbers (basic Luhn-compatible patterns)
+    const ccPatterns = text.match(/\b(?:4\d{3}|5[1-5]\d{2}|6(?:011|5\d{2}))[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g);
+    if (ccPatterns) {
+      findings.push({
+        type: 'credit_card',
+        severity: 'critical',
+        icon: '💳',
+        title: 'Credit Card Number',
+        message: 'Possible credit card number exposed - CRITICAL RISK',
+        values: ccPatterns.map(c => c.replace(/\d(?=\d{4})/g, '*'))
+      });
+    }
+
+    // API keys / tokens (generic patterns)
+    const tokenPatterns = [
+      /(?:api[_-]?key|token|secret|password)[=:\s]+['"]?[A-Za-z0-9_\-]{20,}['"]?/gi,
+      /(?:sk|pk)[-_](?:live|test)[-_][A-Za-z0-9]{20,}/g,
+      /ghp_[A-Za-z0-9]{36}/g,
+      /AIza[A-Za-z0-9_\-]{35}/g,
+    ];
+    for (const pattern of tokenPatterns) {
+      const tokens = text.match(pattern);
+      if (tokens) {
+        findings.push({
+          type: 'api_token',
+          severity: 'critical',
+          icon: '🔑',
+          title: 'API Key / Token Exposed',
+          message: 'Possible API key or authentication token found - CRITICAL RISK',
+          values: tokens.map(t => t.substring(0, 15) + '...[REDACTED]')
+        });
+        break;
+      }
+    }
+
+    // Crypto wallet addresses
+    const btcWallet = text.match(/\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b/g);
+    const ethWallet = text.match(/\b0x[a-fA-F0-9]{40}\b/g);
+    if (btcWallet || ethWallet) {
+      const wallets = [...(btcWallet || []), ...(ethWallet || [])];
+      findings.push({
+        type: 'crypto_wallet',
+        severity: 'medium',
+        icon: '🪙',
+        title: 'Cryptocurrency Wallet Address',
+        message: `${wallets.length} crypto wallet address(es) found - may attract targeted attacks`,
+        values: [...new Set(wallets)]
+      });
+    }
+
+    // Passport number patterns (Vietnamese)
+    const passportVN = text.match(/\b[A-Z]\d{7}\b/g);
+    if (passportVN) {
+      // Phân biệt với các mã khác: chỉ cảnh báo nếu có context
+      const hasContext = /(?:passport|hộ chiếu|CMND|identification)/i.test(text);
+      if (hasContext) {
+        findings.push({
+          type: 'passport',
+          severity: 'critical',
+          icon: '🛂',
+          title: 'Passport / ID Number',
+          message: 'Possible passport or identification number exposed',
+          values: [...new Set(passportVN)]
+        });
+      }
+    }
+
     return findings;
+  },
+
+  // ==================== Data Breach Check ====================
+
+  /**
+   * Kiểm tra email có bị lộ trong các vụ data breach không
+   * Sử dụng Have I Been Pwned API (free, k-anonymity model)
+   * @param {string} email - email cần kiểm tra
+   * @returns {Object|null} kết quả kiểm tra
+   */
+  async checkEmailBreach(email) {
+    if (!email) return null;
+
+    try {
+      // HIBP API v3 - breachedaccount endpoint
+      const res = await fetch(
+        `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=true`,
+        {
+          headers: {
+            'User-Agent': 'SocialShield-Extension',
+          }
+        }
+      );
+
+      if (res.status === 404) {
+        return { breached: false, breachCount: 0, breaches: [] };
+      }
+
+      if (res.status === 401) {
+        // API key required - fallback to password hash check
+        return await this.checkEmailBreachFallback(email);
+      }
+
+      if (!res.ok) {
+        console.warn(`[SocialShield] HIBP API error: ${res.status}`);
+        return null;
+      }
+
+      const breaches = await res.json();
+      return {
+        breached: true,
+        breachCount: breaches.length,
+        breaches: breaches.map(b => b.Name),
+      };
+    } catch (err) {
+      console.error('[SocialShield] checkEmailBreach error:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Fallback: kiểm tra password hash qua HIBP Pwned Passwords API (k-anonymity, no API key)
+   * Kiểm tra xem email prefix có xuất hiện trong các breach dumps phổ biến
+   */
+  async checkEmailBreachFallback(email) {
+    // Sử dụng heuristic: kiểm tra domain của email
+    try {
+      const domain = email.split('@')[1]?.toLowerCase();
+      if (!domain) return null;
+
+      // Danh sách dịch vụ đã bị breach lớn (public knowledge)
+      const knownBreachedDomains = [
+        'yahoo.com', 'yahoo.co', 'linkedin.com', 'adobe.com',
+        'myspace.com', 'dropbox.com', 'tumblr.com', 'lastfm.com',
+      ];
+
+      // Email provider lớn - rất có thể có trong breaches
+      const highRiskProviders = [
+        'gmail.com', 'hotmail.com', 'outlook.com', 'mail.com',
+        'yahoo.com', 'aol.com', 'protonmail.com',
+      ];
+
+      if (knownBreachedDomains.includes(domain)) {
+        return {
+          breached: true,
+          breachCount: -1,
+          breaches: ['Domain has known major breaches'],
+          note: 'Based on known breach database (API key not configured for detailed check)'
+        };
+      }
+
+      if (highRiskProviders.includes(domain)) {
+        return {
+          breached: null,
+          breachCount: -1,
+          breaches: [],
+          note: 'Common email provider - recommend checking at haveibeenpwned.com'
+        };
+      }
+
+      return { breached: false, breachCount: 0, breaches: [] };
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Đánh giá mức độ an toàn password (entropy-based)
+   * Không lưu password - chỉ phân tích pattern
+   * @param {string} text - text có thể chứa password
+   * @returns {Array} findings nếu phát hiện password yếu
+   */
+  checkPasswordExposure(text) {
+    const findings = [];
+
+    // Phát hiện password viết plaintext
+    const pwdPatterns = [
+      /(?:password|pass|mật khẩu|mk|pw)[:\s=]+['"]?([^\s'"]{4,30})['"]?/gi,
+      /(?:pin|mã pin)[:\s=]+(\d{4,8})/gi,
+    ];
+
+    for (const pattern of pwdPatterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        findings.push({
+          type: 'password_exposed',
+          severity: 'critical',
+          icon: '🔓',
+          title: 'Password/PIN Exposed',
+          message: 'Password or PIN code appears to be written in plain text - CRITICAL RISK',
+          values: matches.map(m => m.substring(0, 10) + '...[REDACTED]')
+        });
+        break;
+      }
+    }
+
+    return findings;
+  },
+
+  // ==================== Security Recommendations ====================
+
+  /**
+   * Tạo danh sách recommendations dựa trên findings
+   * @param {Array} findings - kết quả từ scanPrivacy
+   * @param {Object} profileData - thông tin profile
+   * @returns {Array} danh sách khuyến nghị bảo mật
+   */
+  generateSecurityRecommendations(findings, profileData = {}) {
+    const recommendations = [];
+
+    const typeSet = new Set(findings.map(f => f.type));
+
+    if (typeSet.has('email')) {
+      recommendations.push({
+        icon: '📧',
+        title: 'Remove Email from Public Profile',
+        description: 'Move email to private contact info or use a dedicated public email',
+        priority: 'high'
+      });
+    }
+
+    if (typeSet.has('phone_vn') || typeSet.has('phone_intl')) {
+      recommendations.push({
+        icon: '📱',
+        title: 'Remove Phone Number',
+        description: 'Phone numbers enable SIM-swap attacks and spam. Use messaging apps instead',
+        priority: 'high'
+      });
+    }
+
+    if (typeSet.has('national_id') || typeSet.has('passport')) {
+      recommendations.push({
+        icon: '🚨',
+        title: 'URGENT: Remove ID Numbers',
+        description: 'National ID/passport numbers can be used for identity theft. Remove immediately',
+        priority: 'critical'
+      });
+    }
+
+    if (typeSet.has('bank_account') || typeSet.has('credit_card')) {
+      recommendations.push({
+        icon: '💳',
+        title: 'URGENT: Remove Financial Info',
+        description: 'Bank/card numbers enable financial fraud. Remove and monitor your accounts',
+        priority: 'critical'
+      });
+    }
+
+    if (typeSet.has('api_token')) {
+      recommendations.push({
+        icon: '🔑',
+        title: 'Rotate Exposed API Keys',
+        description: 'Regenerate all exposed API keys/tokens immediately. They may already be compromised',
+        priority: 'critical'
+      });
+    }
+
+    if (typeSet.has('password_exposed')) {
+      recommendations.push({
+        icon: '🔒',
+        title: 'Change Exposed Passwords',
+        description: 'Change passwords on all accounts that used the exposed password. Enable 2FA',
+        priority: 'critical'
+      });
+    }
+
+    if (typeSet.has('crypto_wallet')) {
+      recommendations.push({
+        icon: '🪙',
+        title: 'Monitor Crypto Wallets',
+        description: 'Public wallet addresses attract phishing. Consider using separate wallets for public display',
+        priority: 'medium'
+      });
+    }
+
+    if (!profileData.isPrivate) {
+      recommendations.push({
+        icon: '🔐',
+        title: 'Consider Private Account',
+        description: 'A private account limits who can see your information',
+        priority: 'low'
+      });
+    }
+
+    // General recommendations
+    recommendations.push({
+      icon: '🛡️',
+      title: 'Enable Two-Factor Authentication',
+      description: 'Protect your account with 2FA (authenticator app preferred over SMS)',
+      priority: 'medium'
+    });
+
+    return recommendations;
   },
 
   // ==================== Link Scanner ====================

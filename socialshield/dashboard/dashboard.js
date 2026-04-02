@@ -291,10 +291,16 @@
                 ${group.type} &middot; ${group.platform}
               </span>
             </div>
-            ${snapshots.map((snap, i) => `
+            ${snapshots.map((snap, i) => {
+              const ba = SocialShieldDiff.analyzeBots(snap.data);
+              const realCount = ba.totalAnalyzed - ba.botCount;
+              const botLabel = ba.botCount > 0
+                ? ` <span style="font-size: 11px; color: var(--text-secondary);">(${realCount} real, <span style="color: #ef4444;">${ba.botCount} bot</span>)</span>`
+                : '';
+              return `
               <div class="ss-snapshot-item" data-snapshot-id="${snap.id}" data-group-key="${group.key}" data-index="${i}">
                 <div class="ss-snapshot-info">
-                  <div class="ss-snapshot-count">${snap.count} ${group.type}</div>
+                  <div class="ss-snapshot-count">${snap.count} ${group.type}${botLabel}</div>
                   <div class="ss-snapshot-time">${this.formatDate(snap.timestamp)}</div>
                 </div>
                 <div class="ss-snapshot-actions">
@@ -304,7 +310,7 @@
                     data-type="${group.type}" data-snapshot-id="${snap.id}">Del</button>
                 </div>
               </div>
-            `).join('')}
+            `;}).join('')}
           </div>
         `;
       }
@@ -347,12 +353,28 @@
       // Run bot analysis
       const botAnalysis = SocialShieldDiff.analyzeBots(snap.data);
 
+      const realCount = botAnalysis.totalAnalyzed - botAnalysis.botCount;
+      const botBarWidth = botAnalysis.totalAnalyzed > 0 ? (botAnalysis.botCount / botAnalysis.totalAnalyzed * 100) : 0;
       const botSummaryHtml = `
-        <div style="margin-bottom: 16px; padding: 12px; border-radius: 8px; background: ${botAnalysis.botRatio > 20 ? 'rgba(239,68,68,0.1)' : botAnalysis.botCount > 0 ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)'}; border: 1px solid ${botAnalysis.botRatio > 20 ? 'rgba(239,68,68,0.3)' : botAnalysis.botCount > 0 ? 'rgba(245,158,11,0.3)' : 'rgba(16,185,129,0.3)'};">
-          <div style="font-weight: 600; margin-bottom: 4px; color: var(--text-primary);">
-            Bot Analysis: ${botAnalysis.botCount}/${botAnalysis.totalAnalyzed} suspicious (${botAnalysis.botRatio}%)
+        <div style="margin-bottom: 16px; padding: 14px; border-radius: 8px; background: ${botAnalysis.botRatio > 20 ? 'rgba(239,68,68,0.1)' : botAnalysis.botCount > 0 ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)'}; border: 1px solid ${botAnalysis.botRatio > 20 ? 'rgba(239,68,68,0.3)' : botAnalysis.botCount > 0 ? 'rgba(245,158,11,0.3)' : 'rgba(16,185,129,0.3)'};">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <div style="text-align: center;">
+              <div style="font-size: 22px; font-weight: 700; color: #10b981;">${realCount}</div>
+              <div style="font-size: 11px; color: var(--text-secondary);">Real Users</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 22px; font-weight: 700; color: ${botAnalysis.botCount > 0 ? '#ef4444' : '#8888aa'};">${botAnalysis.botCount}</div>
+              <div style="font-size: 11px; color: var(--text-secondary);">Suspected Bots</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 22px; font-weight: 700; color: var(--text-primary);">${botAnalysis.botRatio}%</div>
+              <div style="font-size: 11px; color: var(--text-secondary);">Bot Ratio</div>
+            </div>
           </div>
-          <div style="font-size: 13px; color: var(--text-secondary);">${this.escapeHtml(botAnalysis.summary)}</div>
+          <div style="height: 6px; background: #10b981; border-radius: 3px; overflow: hidden;">
+            <div style="height: 100%; width: ${botBarWidth}%; background: #ef4444; float: right; border-radius: 3px;"></div>
+          </div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">${this.escapeHtml(botAnalysis.summary)}</div>
         </div>
       `;
 
@@ -702,6 +724,8 @@
       document.getElementById('setting-capture-interval').value = String(settings.captureInterval || 360);
       document.getElementById('setting-sb-apikey').value = settings.safeBrowsingApiKey || '';
       document.getElementById('setting-sb-enabled').checked = !!settings.safeBrowsingEnabled;
+      document.getElementById('setting-ai-url').value = settings.aiAnalysisUrl || 'http://localhost:3456';
+      document.getElementById('setting-ai-enabled').checked = !!settings.aiAnalysisEnabled;
     },
 
     async saveSettings() {
@@ -711,6 +735,8 @@
         captureInterval: parseInt(document.getElementById('setting-capture-interval').value) || 360,
         safeBrowsingApiKey: document.getElementById('setting-sb-apikey').value.trim(),
         safeBrowsingEnabled: document.getElementById('setting-sb-enabled').checked,
+        aiAnalysisUrl: document.getElementById('setting-ai-url').value.trim() || 'http://localhost:3456',
+        aiAnalysisEnabled: document.getElementById('setting-ai-enabled').checked,
         suspiciousThreshold: {
           massFollow: parseInt(document.getElementById('setting-mass-follow').value) || 20,
           massUnfollow: parseInt(document.getElementById('setting-mass-unfollow').value) || 10,
@@ -774,6 +800,34 @@
             btn.disabled = false;
           }, 2000);
         }
+      });
+
+      // Test AI connection
+      document.getElementById('btn-test-ai').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-test-ai');
+        const url = document.getElementById('setting-ai-url').value.trim() || 'http://localhost:3456';
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        try {
+          const res = await fetch(`${url}/health`);
+          if (res.ok) {
+            const data = await res.json();
+            btn.textContent = 'Connected!';
+            btn.style.background = 'rgba(0,212,170,0.2)';
+            alert(`AI Server OK!\nStatus: ${data.status}\nAI configured: ${data.aiConfigured}`);
+          } else {
+            throw new Error(`HTTP ${res.status}`);
+          }
+        } catch (err) {
+          btn.textContent = 'Failed';
+          btn.style.background = 'rgba(239,68,68,0.2)';
+          alert(`Cannot connect to AI server at ${url}\nError: ${err.message}\n\nMake sure the server is running: cd server && npm start`);
+        }
+        setTimeout(() => {
+          btn.textContent = 'Test';
+          btn.disabled = false;
+          btn.style.background = '';
+        }, 3000);
       });
 
       // Clear snapshots

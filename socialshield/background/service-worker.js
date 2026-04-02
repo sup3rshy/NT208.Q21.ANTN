@@ -666,6 +666,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
+    case 'ANALYZE_TEXT_AI':
+      (async () => {
+        try {
+          const result = await chrome.storage.local.get('settings');
+          const settings = result.settings || {};
+          if (!settings.aiAnalysisEnabled || !settings.aiAnalysisUrl) {
+            sendResponse({ available: false });
+            return;
+          }
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 12000);
+          const res = await fetch(`${settings.aiAnalysisUrl}/analyze-text`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: message.text, context: message.context || '' }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (!res.ok) {
+            sendResponse({ available: false, error: `HTTP ${res.status}` });
+            return;
+          }
+          const data = await res.json();
+          sendResponse(data);
+        } catch (err) {
+          console.error('[SocialShield] ANALYZE_TEXT_AI error:', err);
+          sendResponse({ available: false, error: err.message });
+        }
+      })();
+      return true;
+
+    case 'CHECK_EMAIL_BREACH':
+      (async () => {
+        try {
+          const res = await fetch(
+            `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(message.email)}?truncateResponse=true`,
+            { headers: { 'User-Agent': 'SocialShield-Extension' } }
+          );
+          if (res.status === 404) {
+            sendResponse({ breached: false, breachCount: 0, breaches: [] });
+          } else if (res.ok) {
+            const breaches = await res.json();
+            sendResponse({ breached: true, breachCount: breaches.length, breaches: breaches.map(b => b.Name) });
+          } else {
+            sendResponse(null);
+          }
+        } catch (err) {
+          console.error('[SocialShield] CHECK_EMAIL_BREACH error:', err);
+          sendResponse(null);
+        }
+      })();
+      return true;
+
     case 'UPDATE_AUTO_CAPTURE':
       setupAutoCaptureAlarm().then(() => {
         sendResponse({ ok: true });

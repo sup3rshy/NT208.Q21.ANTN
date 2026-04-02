@@ -214,6 +214,31 @@ const SocialShieldDiff = {
       reasons.push('Very short username with digits');
     }
 
+    // === Twitter-specific signals (only available from Twitter API) ===
+
+    // 7. Follow ratio bất thường: following rất nhiều nhưng follower rất ít
+    if (user.followersCount !== undefined && user.followingCount !== undefined) {
+      const followers = user.followersCount || 0;
+      const following = user.followingCount || 0;
+      if (following > 500 && followers < 10) {
+        score += 25;
+        reasons.push(`Extreme follow ratio (${following} following / ${followers} followers)`);
+      } else if (following > 200 && followers > 0 && following / followers > 50) {
+        score += 15;
+        reasons.push('Suspicious follow/follower ratio');
+      }
+    }
+
+    // 8. Tài khoản không có tweet nào (egg account)
+    if (user.statusesCount !== undefined && user.statusesCount === 0) {
+      score += 20;
+      reasons.push('Zero tweets posted');
+    } else if (user.statusesCount !== undefined && user.statusesCount < 3 &&
+               user.followingCount !== undefined && user.followingCount > 100) {
+      score += 15;
+      reasons.push('Almost no tweets but follows many accounts');
+    }
+
     return {
       score: Math.min(score, 100),
       reasons,

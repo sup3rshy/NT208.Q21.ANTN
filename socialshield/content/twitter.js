@@ -215,8 +215,11 @@
             this.capturedUsers
           );
 
+          // Bot/real count analysis
+          const botAnalysis = SocialShieldDiff.analyzeBots(this.capturedUsers);
+          const realCount = botAnalysis.realCount || (this.capturedUsers.length - botAnalysis.botCount);
           this.notify(
-            `Captured ${this.capturedUsers.length} ${type} for @${profile}`,
+            `Captured ${this.capturedUsers.length} ${type} for @${profile} (${realCount} real, ${botAnalysis.botCount} bot)`,
             'success'
           );
 
@@ -473,6 +476,56 @@
 
       const findings = SocialShieldScanner.scanPrivacy(bioText);
 
+      // AI Text Analysis - phân tích bio có dấu hiệu scam/phishing không
+      try {
+        const aiResult = await SocialShieldTextAnalyzer.analyzeText(bioText, 'twitter bio');
+        if (aiResult && aiResult.classification !== 'safe') {
+          findings.push({
+            type: 'ai_text_analysis',
+            severity: aiResult.classification === 'scam' ? 'high' : 'medium',
+            icon: '🤖',
+            title: `AI Analysis: ${aiResult.classification.toUpperCase()} content detected`,
+            message: aiResult.reasoning || 'Suspicious text patterns found in profile',
+            values: [`Confidence: ${Math.round(aiResult.confidence * 100)}%`, `Source: ${aiResult.source}`]
+          });
+        }
+      } catch (err) {
+        console.warn('[SocialShield] AI text analysis skipped:', err.message);
+      }
+
+      // Check email breach - kiểm tra email lộ lọt qua HIBP
+      const emailFindings = findings.filter(f => f.type === 'email');
+      if (emailFindings.length > 0) {
+        for (const ef of emailFindings) {
+          for (const email of (ef.values || [])) {
+            try {
+              const breachResult = await chrome.runtime.sendMessage({
+                type: 'CHECK_EMAIL_BREACH',
+                email
+              });
+              if (breachResult && breachResult.breached) {
+                findings.push({
+                  type: 'email_breach',
+                  severity: 'critical',
+                  icon: '💀',
+                  title: 'Email Found in Data Breach',
+                  message: `${email} appeared in ${breachResult.breachCount} known data breach(es)`,
+                  values: breachResult.breaches || []
+                });
+              }
+            } catch (err) {
+              console.warn('[SocialShield] Breach check skipped:', err.message);
+            }
+          }
+        }
+      }
+
+      // Check password exposure
+      const pwdFindings = SocialShieldScanner.checkPasswordExposure(bioText);
+      if (pwdFindings.length > 0) {
+        findings.push(...pwdFindings);
+      }
+
       // Lấy thêm thông tin profile qua API
       let profileData = {
         externalUrl: null, isPrivate: false,
@@ -504,6 +557,17 @@
         followingCount: profileData.followingCount,
         postCount: profileData.postCount
       });
+
+      // Merge thêm findings từ AI/breach/password vào analysis
+      analysis.privacyFindings = [...analysis.privacyFindings, ...findings.filter(f =>
+        ['ai_text_analysis', 'email_breach', 'password_exposed'].includes(f.type)
+      )];
+
+      // Generate security recommendations
+      const recommendations = SocialShieldScanner.generateSecurityRecommendations(
+        analysis.privacyFindings, profileData
+      );
+      analysis.recommendations = recommendations;
 
       if (profile) {
         await SocialShieldStorage.savePrivacyScan('twitter', profile, analysis.privacyFindings);
