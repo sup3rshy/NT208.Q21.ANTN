@@ -57,7 +57,7 @@ const InstagramAPI = {
       const cookieHeader = await this.buildCookieHeader();
 
       const res = await fetch(
-        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
         {
           headers: {
             'x-csrftoken': csrfToken,
@@ -90,7 +90,7 @@ const InstagramAPI = {
       const cookieHeader = await this.buildCookieHeader();
 
       const res = await fetch(
-        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
         {
           headers: {
             'x-csrftoken': csrfToken,
@@ -290,7 +290,7 @@ const TwitterAPI = {
       const cookieHeader = await this.buildCookieHeader();
 
       const res = await fetch(
-        `https://x.com/i/api/1.1/users/show.json?screen_name=${screenName}`,
+        `https://x.com/i/api/1.1/users/show.json?screen_name=${encodeURIComponent(screenName)}`,
         { headers: this.getHeaders(csrfToken, cookieHeader) }
       );
 
@@ -326,7 +326,7 @@ const TwitterAPI = {
       while (cursor !== '0') {
         page++;
         try {
-          const url = `https://x.com/i/api/1.1/${endpoint}/list.json?screen_name=${screenName}&count=200&cursor=${cursor}&skip_status=true&include_user_entities=false`;
+          const url = `https://x.com/i/api/1.1/${endpoint}/list.json?screen_name=${encodeURIComponent(screenName)}&count=200&cursor=${cursor}&skip_status=true&include_user_entities=false`;
 
           const res = await fetch(url, { headers });
 
@@ -479,7 +479,7 @@ async function saveAutoCaptureSnapshot(profile, type, users, settings) {
   if (users.length === 0) return 0;
 
   const snapshot = {
-    id: `snap_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
     platform: profile.platform,
     username: profile.username,
     type,
@@ -494,6 +494,17 @@ async function saveAutoCaptureSnapshot(profile, type, users, settings) {
   const existing = (await chrome.storage.local.get(storageKey))[storageKey] || [];
   existing.push(snapshot);
   await chrome.storage.local.set({ [storageKey]: existing });
+
+  // Cập nhật snapshot_index để dashboard thấy snapshot mới
+  const indexResult = await chrome.storage.local.get('snapshot_index');
+  const snapshotIndex = indexResult.snapshot_index || {};
+  snapshotIndex[storageKey] = {
+    platform: profile.platform,
+    username: profile.username,
+    type,
+    lastUpdated: Date.now()
+  };
+  await chrome.storage.local.set({ snapshot_index: snapshotIndex });
 
   // Auto-compare với snapshot trước
   if (existing.length >= 2) {

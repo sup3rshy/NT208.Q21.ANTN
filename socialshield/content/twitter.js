@@ -71,6 +71,7 @@
       this.injectNotificationArea();
       this.listenForMessages();
       this.observeUrlChanges();
+      this.startCommentScanner();
       console.log('[SocialShield] Twitter/X content script loaded');
     },
 
@@ -106,6 +107,14 @@
           <button class="ss-fab-action" data-action="scan-links">
             <span class="ss-fab-action-icon">🔗</span>
             <span>Check Links</span>
+          </button>
+          <button class="ss-fab-action" data-action="engagement-rate">
+            <span class="ss-fab-action-icon">📊</span>
+            <span>Engagement Rate</span>
+          </button>
+          <button class="ss-fab-action" data-action="check-impersonation">
+            <span class="ss-fab-action-icon">🎭</span>
+            <span>Impersonation Check</span>
           </button>
         </div>
       `;
@@ -164,6 +173,16 @@
 
         case 'scan-links':
           await this.runLinkScan();
+          break;
+
+        case 'engagement-rate':
+          if (!profile) return this.notify('Navigate to a profile page first!', 'error');
+          await this.runEngagementRate(profile);
+          break;
+
+        case 'check-impersonation':
+          if (!profile) return this.notify('Navigate to a profile page first!', 'error');
+          await this.runImpersonationCheck(profile);
           break;
       }
     },
@@ -229,6 +248,39 @@
           });
 
           await this.autoCompare(profile, type, snapshot);
+
+          // Profile Change Tracking
+          try {
+            const userInfo = await this.fetchUserInfo(profile);
+            if (userInfo) {
+              const { entry, changes } = await SocialShieldStorage.saveProfileSnapshot('twitter', profile, {
+                displayName: userInfo.name || '',
+                bio: userInfo.description || '',
+                profilePicUrl: userInfo.profile_image_url_https || '',
+                externalUrl: userInfo.url || userInfo.entities?.url?.urls?.[0]?.expanded_url || '',
+                isPrivate: !!userInfo.protected,
+                isVerified: !!userInfo.verified || !!userInfo.is_blue_verified,
+                followerCount: userInfo.followers_count || 0,
+                followingCount: userInfo.friends_count || 0,
+                postCount: userInfo.statuses_count || 0,
+              });
+              if (changes.length > 0) {
+                const changeList = changes.map(c => c.label).join(', ');
+                this.notify(`Profile changes detected: ${changeList}`, 'warning');
+                await SocialShieldStorage.saveAlert({
+                  type: 'profile_change',
+                  severity: 'warning',
+                  title: 'Profile Changes Detected',
+                  message: `@${profile}: ${changeList} changed since last capture`,
+                  platform: 'twitter',
+                  username: profile,
+                  details: changes
+                });
+              }
+            }
+          } catch (e) {
+            console.warn('[SocialShield] Profile tracking error:', e);
+          }
         } else {
           this.notify('No users captured. The list might be empty or private.', 'warning');
         }
@@ -590,6 +642,94 @@
       });
     },
 
+    // ==================== Engagement Rate ====================
+
+    async runEngagementRate(profile) {
+      this.notify('Calculating engagement rate...', 'info');
+      try {
+        const userInfo = await this.fetchUserInfo(profile);
+        if (!userInfo) {
+          this.notify('Could not fetch user info.', 'error');
+          return;
+        }
+
+        const engagement = SocialShieldScanner.calculateEngagement({
+          followerCount: userInfo.followers_count,
+          followingCount: userInfo.friends_count,
+          postCount: userInfo.statuses_count,
+          totalLikes: userInfo.favourites_count || 0,
+        });
+
+        const qualityLabels = {
+          excellent: '🟢 Excellent', good: '🟢 Good', average: '🟡 Average',
+          low: '🔴 Low', suspicious_high: '🔴 Suspiciously High',
+          no_data: '⚪ No Data', no_followers: '⚪ No Followers'
+        };
+
+        const lines = [
+          `Engagement: ${qualityLabels[engagement.quality] || engagement.quality}`,
+          `Follower/Following Ratio: ${engagement.followerFollowingRatio}`,
+          `Tweets: ${userInfo.statuses_count} | Followers: ${userInfo.followers_count} | Following: ${userInfo.friends_count}`,
+        ];
+        if (engagement.flags.length > 0) {
+          lines.push(`Flags: ${engagement.flags.join('; ')}`);
+        }
+        this.notify(lines.join('\n'), engagement.flags.length > 0 ? 'warning' : 'success');
+      } catch (err) {
+        console.error('[SocialShield] Engagement rate error:', err);
+        this.notify('Error calculating engagement rate.', 'error');
+      }
+    },
+
+    // ==================== Impersonation Check ====================
+
+    async runImpersonationCheck(profile) {
+      this.notify('Checking for impersonation accounts...', 'info');
+      try {
+        const userInfo = await this.fetchUserInfo(profile);
+        const displayName = userInfo?.name || '';
+
+        const followers = await SocialShieldStorage.getSnapshots('twitter', profile, 'followers');
+        const following = await SocialShieldStorage.getSnapshots('twitter', profile, 'following');
+        const latestFollowers = followers.length > 0 ? followers[followers.length - 1].data : [];
+        const latestFollowing = following.length > 0 ? following[following.length - 1].data : [];
+        const allUsers = [...latestFollowers, ...latestFollowing];
+
+        if (allUsers.length === 0) {
+          this.notify('No captured data. Capture followers/following first!', 'warning');
+          return;
+        }
+
+        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers);
+
+        if (suspects.length === 0) {
+          this.notify(`No impersonation accounts found among ${allUsers.length} users.`, 'success');
+        } else {
+          const top3 = suspects.slice(0, 3).map(s =>
+            `@${s.username} (${s.impersonationScore}%)`
+          ).join(', ');
+          this.notify(
+            `Found ${suspects.length} suspected impersonation account(s): ${top3}. Check dashboard for details.`,
+            'warning'
+          );
+          await SocialShieldStorage.saveAlert({
+            type: 'impersonation',
+            severity: 'danger',
+            title: 'Impersonation Accounts Detected',
+            message: `${suspects.length} account(s) may be impersonating @${profile}`,
+            platform: 'twitter',
+            username: profile,
+            details: suspects.slice(0, 10).map(s => ({
+              username: s.username, score: s.impersonationScore, reasons: s.impersonationReasons
+            }))
+          });
+        }
+      } catch (err) {
+        console.error('[SocialShield] Impersonation check error:', err);
+        this.notify('Error checking for impersonation.', 'error');
+      }
+    },
+
     // ==================== Link Scan ====================
 
     async runLinkScan() {
@@ -644,6 +784,62 @@
         type: 'LINK_SCAN_COMPLETE',
         data: { total: results.length, unsafe: unsafe.length, results }
       });
+    },
+
+    // ==================== Comment/Reply Scam Scanner ====================
+
+    startCommentScanner() {
+      const scannedElements = new WeakSet();
+
+      const scanTweet = (el) => {
+        if (scannedElements.has(el)) return;
+        scannedElements.add(el);
+
+        const text = el.innerText || el.textContent || '';
+        if (text.length < 15) return;
+
+        const result = SocialShieldTextAnalyzer.analyzeTextRuleBased(text);
+        if (result.classification === 'safe') return;
+
+        // Overlay warning
+        const tweetArticle = el.closest('article') || el.closest('[data-testid="tweet"]') || el;
+        if (tweetArticle.querySelector('.ss-scam-badge')) return;
+
+        tweetArticle.style.position = 'relative';
+        const badge = document.createElement('div');
+        badge.className = 'ss-scam-badge';
+        badge.title = result.reasoning;
+        badge.innerHTML = result.classification === 'scam'
+          ? '🚨 <span>Scam</span>'
+          : '⚠️ <span>Suspicious</span>';
+        badge.style.cssText = `
+          position: absolute; top: 4px; right: 4px; z-index: 9999;
+          background: ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'};
+          color: white; font-size: 10px; font-weight: 600; padding: 2px 6px;
+          border-radius: 4px; cursor: help; display: flex; align-items: center; gap: 3px;
+          font-family: -apple-system, sans-serif; line-height: 1.2;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        `;
+        badge.querySelector('span').style.cssText = 'font-size: 10px;';
+        tweetArticle.style.outline = `1px solid ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'}`;
+        tweetArticle.style.outlineOffset = '1px';
+        tweetArticle.style.borderRadius = '12px';
+        tweetArticle.appendChild(badge);
+      };
+
+      const scanAllTweets = () => {
+        // Twitter uses data-testid="tweetText" for tweet content
+        document.querySelectorAll('[data-testid="tweetText"]').forEach(el => scanTweet(el));
+      };
+
+      setTimeout(scanAllTweets, 3000);
+
+      let debounceTimer = null;
+      const observer = new MutationObserver(() => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(scanAllTweets, 500);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
     },
 
     // ==================== URL Observer ====================

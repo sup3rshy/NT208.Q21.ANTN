@@ -10,11 +10,23 @@ const OpenAI = require('openai');
 const app = express();
 const PORT = process.env.PORT || 3456;
 
-// OpenAI client
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// OpenAI client - chỉ khởi tạo nếu có API key
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 // CORS: cho phép Chrome extension và localhost
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || origin.startsWith('chrome-extension://') || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '16kb' }));
 
 // ==================== Rate Limiting (in-memory) ====================
@@ -71,7 +83,7 @@ Rules:
 // ==================== POST /analyze-text ====================
 
 app.post('/analyze-text', async (req, res) => {
-  const ip = req.ip || req.connection.remoteAddress;
+  const ip = req.ip || req.socket?.remoteAddress;
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Try again later.' });
   }
@@ -84,6 +96,20 @@ app.post('/analyze-text', async (req, res) => {
 
   if (text.length > 5000) {
     return res.status(400).json({ error: 'Text too long (max 5000 characters)' });
+  }
+
+  // Nếu không có OpenAI client → fallback rule-based (không log lỗi)
+  if (!openai) {
+    const score = ruleBasedScore(text);
+    const classification = score >= 60 ? 'scam' : score >= 30 ? 'suspicious' : 'safe';
+    return res.json({
+      classification,
+      confidence: 0.5,
+      reasoning: classification !== 'safe'
+        ? 'Rule-based analysis detected suspicious patterns'
+        : 'No suspicious patterns detected (rule-based)',
+      source: 'rule-based',
+    });
   }
 
   try {
@@ -141,7 +167,8 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'SocialShield AI Server',
     version: '1.0.0',
-    aiConfigured: !!process.env.OPENAI_API_KEY,
+    aiConfigured: !!openai,
+    mode: openai ? 'ai' : 'rule-based-only',
   });
 });
 
@@ -168,7 +195,6 @@ function fallbackResult(errorReason, text = '') {
 }
 
 function ruleBasedScore(text) {
-  const lower = text.toLowerCase();
   let score = 0;
 
   const scamPatterns = [

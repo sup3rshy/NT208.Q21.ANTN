@@ -1,66 +1,79 @@
 # SocialShield - Social Media Security Extension
 
-A comprehensive Chrome extension for monitoring and protecting your social media accounts from bots, phishing, data breaches, and privacy risks.
+Chrome extension giám sát và bảo vệ tài khoản mạng xã hội khỏi bot, phishing, rò rỉ dữ liệu và các rủi ro bảo mật.
 
 ## Features
 
-### 📸 Capture & Bot Detection
-- **Multi-platform support**: Instagram and Twitter/X
-- **Capture followers/following lists** with automatic pagination handling
-- **Bot detection heuristics**: Analyzes profile pictures, username patterns, follow ratios, activity levels
-- **Real vs Bot count display**: Shows bot percentage in capture notifications and dashboard
-- **Snapshot comparison**: Track changes between captures and detect suspicious activity
+### Capture & Bot Detection
+- **Hỗ trợ đa nền tảng**: Instagram và Twitter/X
+- **Capture danh sách followers/following** với phân trang tự động
+- **Phát hiện bot** bằng 8+ tín hiệu heuristic (ảnh đại diện, username pattern, follow ratio, mức độ hoạt động...)
+- **Hiển thị tỷ lệ Real/Bot** trong notification và dashboard
+- **So sánh snapshot**: Theo dõi thay đổi giữa các lần capture, phát hiện hoạt động bất thường
 
-### 🔍 Privacy Scanning
-- **Comprehensive PII detection**:
-  - Email addresses
-  - Phone numbers (Vietnamese and international formats)
-  - National ID numbers (CCCD with context checking)
-  - Passport numbers
-  - Bank account numbers
-  - Credit card patterns
-  - API keys and tokens
-  - Crypto wallet addresses
+### Privacy Scanning
+- **Phát hiện PII toàn diện**:
+  - Email, số điện thoại (Việt Nam và quốc tế)
+  - CCCD/CMND (kiểm tra ngữ cảnh)
+  - Hộ chiếu, tài khoản ngân hàng, mẫu thẻ tín dụng
+  - API key/token, địa chỉ ví crypto
+- **Phân tích văn bản bằng AI**: Sử dụng OpenAI GPT-4o-mini phát hiện phishing, scam (fallback sang rule-based)
+- **Kiểm tra rò rỉ dữ liệu**: Tích hợp Have I Been Pwned API
+- **Phát hiện mật khẩu lộ**: Cảnh báo nếu plaintext password/PIN xuất hiện trong bio
+- **Gợi ý bảo mật**: Đưa ra lời khuyên dựa trên rủi ro phát hiện được
 
-- **AI-powered text analysis**: Uses OpenAI GPT-4o-mini to detect:
-  - Phishing attempts
-  - Scam content
-  - Suspicious text patterns
-  - Confidence scoring (with fallback to rule-based analysis)
+### Link Scanning
+- **Phân tích URL** phát hiện phishing và malware
+- **Phát hiện URL shortener** (thường dùng trong scam)
+- **Phát hiện typosquatting** với pattern đặc thù mạng xã hội
+- **Tích hợp Google Safe Browsing** (tùy chọn, cần API key)
+- **Highlight link không an toàn** trực tiếp trên trang
 
-- **Data breach checking**: Integration with Have I Been Pwned API
-  - Check if exposed emails appear in known breaches
-  - Shows breach service names and count
-  - Includes fallback domain-based heuristics
+### Profile Change Tracking
+- **Tự động lưu snapshot profile** metadata (bio, display name, avatar, link, trạng thái riêng tư/xác minh)
+- **Phát hiện thay đổi**: So sánh với snapshot trước, cảnh báo khi có thay đổi bất thường
+- **Lịch sử thay đổi**: Xem toàn bộ timeline thay đổi profile trên Security Score dashboard
+- **Giới hạn 50 entry/profile** để tối ưu storage
 
-- **Password exposure detection**: Alerts if plaintext passwords/PINs are in bio
+### Engagement Rate Calculator
+- **Tính engagement rate** dựa trên likes, comments, followers
+- **Đánh giá chất lượng**: Excellent (>=3%), Good (>=1%), Average (>=0.5%), Low (<0.5%)
+- **Phát hiện bất thường**: Suspicious high (>10%), follower/following ratio cực đoan, engagement quá thấp so với followers
+- Truy cập qua FAB menu trên trang profile
 
-- **Security recommendations**: Generates actionable advice based on detected risks
+### DM/Comment Scam Warning
+- **Quét comment/tweet real-time** bằng MutationObserver (debounced)
+- **Phát hiện pattern scam**: phishing link, yêu cầu chuyển tiền, crypto scam, giả mạo support...
+- **Overlay badge** trên comment/tweet đáng ngờ với mức độ risk
+- Hoạt động tự động khi duyệt Instagram/Twitter
 
-### 🔗 Link Scanning
-- **URL analysis** for phishing and malware indicators
-- **URL shortener detection** (often used in scams)
-- **Typosquatting detection** with social media-specific patterns
-- **Google Safe Browsing integration** (optional, requires API key)
-- **Highlighted unsafe links** on the page
+### Impersonation Detection
+- **Phát hiện tài khoản giả mạo** dựa trên phân tích username
+- **Kiểm tra đa chiều**: substring matching, character substitution (l↔1, o↔0), edit distance, common affix patterns (real_, official_, _backup...)
+- **So khớp display name** và kiểm tra ảnh đại diện mặc định
+- **Scoring threshold 30+** với sắp xếp theo độ nghi ngờ
 
-### 📊 Dashboard
-- **Snapshot history** with bot/real ratios and timestamps
-- **Diff viewer** showing added/removed followers between captures
-- **Alert management** with severity levels (low/medium/high/critical)
-- **Privacy scan results** with detailed findings and recommendations
-- **Settings panel**:
-  - Google Safe Browsing API key configuration
-  - AI analysis endpoint (Express backend)
-  - Enable/disable AI analysis
+### Security Score Dashboard
+- **Điểm bảo mật tổng hợp** (hệ thống trừ điểm từ 100)
+- **Bảng phân tích chi tiết**: Privacy findings, active alerts, bot ratio, profile stability, monitoring freshness
+- **Lịch sử thay đổi profile** với giá trị cũ → mới
+- **Gợi ý bảo mật thông minh** dựa trên điểm số và breakdown
+- **Export báo cáo**: CSV (UTF-8 BOM) và JSON đầy đủ
 
-### 🤖 AI Endpoint Backend
-- **Express.js server** with OpenAI integration
-- **Text classification**: Analyzes social media content for security threats
-- **Rate limiting**: 60 requests per minute per IP
-- **CORS enabled** for Chrome extension communication
-- **Fallback pattern**: Rule-based analysis when AI is unavailable
-- **Health check endpoint**: Verify backend connectivity
+### Dashboard
+- **Snapshot history** với bot/real ratio và timestamps
+- **Diff viewer** hiển thị followers thêm/xóa giữa các capture
+- **Quản lý cảnh báo** với mức độ severity (low/medium/high/critical)
+- **Kết quả privacy scan** chi tiết với findings và recommendations
+- **Settings panel**: Google Safe Browsing API key, AI analysis endpoint, toggle AI
+
+### AI Endpoint Backend
+- **Express.js server** với OpenAI integration
+- **Phân loại văn bản**: scam / suspicious / safe với confidence scoring
+- **Rate limiting**: 60 requests/phút/IP
+- **CORS bảo mật**: Chỉ cho phép chrome-extension và localhost
+- **Fallback pattern**: Rule-based analysis khi AI không khả dụng
+- **Health check endpoint**: Kiểm tra kết nối backend
 
 ## Installation
 
@@ -77,219 +90,131 @@ npm install
 ```
 
 ### 3. Configure Environment
-Create `.env` in the `server` directory:
+```bash
+cp server/.env.example server/.env
+```
+Chỉnh sửa `server/.env`:
 ```env
-OPENAI_API_KEY=your_openai_api_key
+OPENAI_API_KEY=your_openai_api_key   # Tùy chọn - fallback sang rule-based nếu không có
 PORT=3000
 ```
 
 ### 4. Load Extension in Chrome
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable "Developer mode" (top-right toggle)
+1. Mở Chrome → `chrome://extensions/`
+2. Bật "Developer mode" (góc trên phải)
 3. Click "Load unpacked"
-4. Select the `socialshield` folder
-5. Extension icon should appear in toolbar
+4. Chọn thư mục `socialshield`
+5. Icon extension sẽ xuất hiện trên toolbar
 
 ### 5. Start Backend Server
 ```bash
 cd server
 npm start
 ```
-Server will run on `http://localhost:3000`
+Server chạy tại `http://localhost:3000`
 
-## Configuration
-
-### OpenAI Setup
-Get your API key from [OpenAI API Keys](https://platform.openai.com/api-keys)
-
-### Google Safe Browsing (Optional)
-1. Get API key from [Google Cloud Console](https://console.cloud.google.com/)
-2. Enter in extension settings (Dashboard → Settings → Safe Browsing API Key)
-
-### AI Endpoint Configuration
-In Dashboard → Settings → AI Analysis:
-- Enter backend URL (default: `http://localhost:3000`)
-- Toggle "Enable AI Analysis"
-- Click "Test Connection" to verify
+> **Note**: Server là tùy chọn. Không có server, extension vẫn hoạt động với rule-based text analysis.
 
 ## Usage
 
 ### Capture Followers/Following
-1. Navigate to a user's profile on Instagram or Twitter/X
-2. Click the SocialShield FAB (floating button, bottom-right)
-3. Select "Capture Following" or "Capture Followers"
-4. Wait for capture to complete
-5. View results in Dashboard with bot/real counts
+1. Vào trang profile trên Instagram hoặc Twitter/X
+2. Click FAB (nút tròn góc dưới phải)
+3. Chọn "Capture Following" hoặc "Capture Followers"
+4. Chờ capture hoàn tất → xem kết quả trên Dashboard
 
 ### Privacy Scan
-1. Go to any profile page
+1. Vào bất kỳ trang profile nào
 2. Click FAB → "Privacy Scan"
-3. Extension analyzes profile text for exposed data
-4. Results show:
-   - Detected PII (emails, phone, IDs, etc.)
-   - AI analysis results (phishing/scam indicators)
-   - Data breach status
-   - Security recommendations
+3. Extension phân tích: PII, AI analysis, data breach, password exposure
+4. Kết quả hiển thị trực tiếp + lưu vào Dashboard
 
-### Link Scanning
-1. Click FAB → "Check Links"
-2. Scans all external links on page
-3. Shows unsafe/warning links with details
-4. Unsafe links are highlighted with red outline
+### Engagement Rate
+1. Vào trang profile
+2. Click FAB → "Engagement Rate"
+3. Xem tỷ lệ tương tác, chất lượng, và cảnh báo bất thường
 
-### View Snapshots
-1. Open Dashboard (extension icon → Dashboard)
-2. View all captured snapshots with:
-   - Capture date
-   - Total count
-   - Real user / Suspected bot ratio
-   - Progress bar visualization
+### Impersonation Check
+1. Vào trang profile
+2. Click FAB → "Impersonation Check"
+3. Extension quét followers để tìm tài khoản giả mạo username tương tự
 
-### Compare Snapshots
-1. Click on any snapshot in Dashboard
-2. View detailed comparison:
-   - Added accounts
-   - Removed accounts
-   - Bot analysis for each
-   - Change summary
+### Security Score
+1. Mở Dashboard → click "Security Score" trên sidebar
+2. Xem điểm bảo mật tổng hợp, breakdown chi tiết
+3. Xem lịch sử thay đổi profile và gợi ý bảo mật
+4. Export báo cáo CSV hoặc JSON
 
 ## Architecture
 
-### Frontend
-- **Manifest V3**: Modern extension architecture
-- **Content Scripts**: `content/instagram.js`, `content/twitter.js`
-  - DOM observation and user interaction
-  - API data collection
-  - Privacy scanning on-page
-- **Service Worker**: `background/service-worker.js`
-  - Background API calls
-  - Message routing
-  - Storage management
-- **Dashboard**: `dashboard/dashboard.html`
-  - Snapshot viewing
-  - Settings management
-  - Analytics display
+```
+socialshield/
+├── manifest.json                 # Extension config (Manifest V3)
+├── background/
+│   └── service-worker.js        # Background: API calls, message routing, auto-capture, alarms
+├── content/
+│   ├── instagram.js             # Instagram: capture, scan, FAB, comment scanner, profile tracking
+│   ├── instagram.css
+│   ├── twitter.js               # Twitter/X: capture, scan, FAB, tweet scanner, profile tracking
+│   └── twitter.css
+├── lib/
+│   ├── storage.js               # Chrome Storage API wrapper + profile history
+│   ├── scanner.js               # Privacy scan, link scan, engagement calc, impersonation detect
+│   ├── diff.js                  # Snapshot comparison, bot detection (8+ signals)
+│   ├── text-analyzer.js         # AI + rule-based text classification (20+ patterns)
+│   └── chart.min.js             # Chart.js for dashboard visualizations
+├── dashboard/
+│   ├── dashboard.html           # Dashboard UI (snapshots, compare, privacy, alerts, settings, security score)
+│   ├── dashboard.js             # Dashboard logic + security score + CSV/JSON export
+│   └── dashboard.css            # Dark theme styling
+├── popup/
+│   ├── popup.html               # Extension popup UI
+│   └── popup.js                 # Popup logic (stats, quick actions)
+├── server/
+│   ├── index.js                 # Express.js backend (OpenAI + rule-based fallback)
+│   ├── package.json
+│   └── .env.example             # Environment template
+├── icons/                       # Extension icons
+├── .gitignore
+└── README.md
+```
 
-### Backend
-- **Express.js**: RESTful API server
-- **OpenAI Integration**: GPT-4o-mini text analysis
-- **CORS Support**: Chrome extension communication
-- **Rate Limiting**: Protect API endpoints
+### Platform APIs Used
 
-### Libraries
-- **Storage**: Chrome Storage API (local storage for snapshots/settings)
-- **Scanner**: Privacy detection, link analysis, bot scoring
-- **Diff Engine**: Snapshot comparison and anomaly detection
-- **Text Analyzer**: AI + rule-based text classification
-
-## Platform-Specific APIs
-
-### Instagram
-- `web_profile_info`: Get user ID and profile metadata
-- `friendships/{id}/followers`: Fetch followers list (cursor-based)
-- `friendships/{id}/following`: Fetch following list (cursor-based)
-
-### Twitter/X
-- `users/show.json`: Get user info (followers count, etc.)
-- `followers/list.json`: Fetch followers (cursor-based)
-- `friends/list.json`: Fetch following (cursor-based)
+| Platform | Endpoint | Purpose |
+|----------|----------|---------|
+| Instagram | `web_profile_info` | Profile metadata + user ID |
+| Instagram | `friendships/{id}/followers` | Fetch followers (cursor-based) |
+| Instagram | `friendships/{id}/following` | Fetch following (cursor-based) |
+| Twitter/X | `users/show.json` | User info (follower count, etc.) |
+| Twitter/X | `followers/list.json` | Fetch followers (cursor-based) |
+| Twitter/X | `friends/list.json` | Fetch following (cursor-based) |
 
 ## Privacy & Security
 
-- ✅ No data sent to third parties (except OpenAI for text analysis if enabled)
-- ✅ Snapshots stored locally in browser storage
-- ✅ Have I Been Pwned checks use only email (no password)
-- ✅ API keys and credentials entered only by user
-- ✅ Chrome extension sandboxing protects against malware
+- Không gửi dữ liệu cho bên thứ ba (trừ OpenAI nếu bật AI analysis)
+- Snapshot lưu local trong Chrome Storage
+- HIBP check chỉ dùng email (không gửi password)
+- API key do người dùng tự nhập
+- CORS server chỉ cho phép chrome-extension và localhost
+- URL parameters được encode đúng cách (chống injection)
 
 ## Tech Stack
 
 - **Frontend**: Chrome Extensions Manifest V3, Vanilla JavaScript, CSS
 - **Backend**: Node.js, Express.js, OpenAI API
-- **APIs**:
-  - Instagram internal API (v1.1)
-  - Twitter/X internal API (v1.1)
-  - Have I Been Pwned v3
-  - Google Safe Browsing v4 (optional)
-  - OpenAI GPT-4o-mini
-
-## Development
-
-### Project Structure
-```
-socialshield/
-├── manifest.json              # Extension configuration
-├── background/
-│   └── service-worker.js     # Background logic
-├── content/
-│   ├── instagram.js          # Instagram content script
-│   ├── twitter.js            # Twitter/X content script
-│   └── *.css                 # Content script styles
-├── lib/
-│   ├── storage.js            # Chrome Storage API wrapper
-│   ├── scanner.js            # Privacy & link scanning
-│   ├── diff.js               # Snapshot comparison & bot detection
-│   └── text-analyzer.js      # AI + rule-based text analysis
-├── dashboard/
-│   ├── dashboard.html        # Dashboard UI
-│   ├── dashboard.js          # Dashboard logic
-│   └── dashboard.css         # Dashboard styles
-├── popup/
-│   ├── popup.html            # Popup UI
-│   └── popup.js              # Popup logic
-├── server/                   # Express backend
-│   ├── index.js              # Server entry point
-│   ├── package.json          # Dependencies
-│   └── .env                  # Environment variables
-└── README.md                 # This file
-```
-
-### Adding New Platforms
-
-To add support for a new social media platform:
-
-1. **Create content script**: `content/[platform].js`
-   - Implement `getCurrentProfile()`, `fetchConnectionsAPI()`, `runPrivacyScan()`
-   - Mirror Instagram/Twitter structure
-
-2. **Create CSS**: `content/[platform].css`
-   - Copy FAB and notification styles from existing
-
-3. **Update manifest.json**:
-   - Add host permissions for new domain
-   - Add content script entry
-
-4. **Update service-worker.js**:
-   - Add platform-specific message handlers if needed
-   - Add auto-capture logic
+- **APIs**: Instagram API v1.1, Twitter/X API v1.1, Have I Been Pwned v3, Google Safe Browsing v4, OpenAI GPT-4o-mini
 
 ## Troubleshooting
 
-### "Extension context invalidated" error
-- Refresh the page you're on (extension was updated)
-
-### AI analysis not working
-- Check if Express server is running: `http://localhost:3000/health`
-- Verify OpenAI API key is correct in `.env`
-- Check browser console for error messages
-
-### Capture incomplete (fewer users than expected)
-- Wait between attempts - Instagram/Twitter rate limit requests
-- Extension retries up to 5 times automatically
-- Check if account is public/not blocked
-
-### Links not scanning with Safe Browsing
-- Configure API key in Dashboard settings
-- Verify quota not exceeded on Google Cloud Console
+| Vấn đề | Giải pháp |
+|--------|-----------|
+| "Extension context invalidated" | Refresh trang (extension đã được cập nhật) |
+| AI analysis không hoạt động | Kiểm tra server: `http://localhost:3000/health` |
+| Capture không đủ users | Chờ giữa các lần capture (rate limit). Extension tự retry tối đa 5 lần |
+| Safe Browsing không scan | Cấu hình API key trong Dashboard → Settings |
+| Server crash khi start | Kiểm tra port không bị chiếm, `.env` đúng format |
 
 ## License
 
-University project for Web Programming course.
-
-## Contributing
-
-Pull requests welcome for bug fixes and improvements.
-
-## Support
-
-For issues and feature requests, open an issue on GitHub.
+Đồ án môn Lập trình Web.

@@ -78,6 +78,7 @@
       this.injectNotificationArea();
       this.listenForMessages();
       this.observeUrlChanges();
+      this.startCommentScanner();
       console.log('[SocialShield] Instagram content script loaded');
     },
 
@@ -113,6 +114,14 @@
           <button class="ss-fab-action" data-action="scan-links">
             <span class="ss-fab-action-icon">🔗</span>
             <span>Check Links</span>
+          </button>
+          <button class="ss-fab-action" data-action="engagement-rate">
+            <span class="ss-fab-action-icon">📊</span>
+            <span>Engagement Rate</span>
+          </button>
+          <button class="ss-fab-action" data-action="check-impersonation">
+            <span class="ss-fab-action-icon">🎭</span>
+            <span>Impersonation Check</span>
           </button>
         </div>
       `;
@@ -175,6 +184,16 @@
 
         case 'scan-links':
           await this.runLinkScan();
+          break;
+
+        case 'engagement-rate':
+          if (!profile) return this.notify('Navigate to a profile page first!', 'error');
+          await this.runEngagementRate(profile);
+          break;
+
+        case 'check-impersonation':
+          if (!profile) return this.notify('Navigate to a profile page first!', 'error');
+          await this.runImpersonationCheck(profile);
           break;
       }
     },
@@ -240,6 +259,42 @@
           });
 
           await this.autoCompare(profile, type, snapshot);
+
+          // Profile Change Tracking: lưu metadata profile mỗi lần capture
+          try {
+            const profileData = await this.extractProfileData();
+            const profileInfo = await chrome.runtime.sendMessage({
+              type: 'FETCH_PROFILE_INFO', username: profile
+            });
+            if (profileInfo) {
+              const { entry, changes } = await SocialShieldStorage.saveProfileSnapshot('instagram', profile, {
+                displayName: profileInfo.fullName || '',
+                bio: profileInfo.bio || '',
+                profilePicUrl: profileInfo.profilePicUrl || '',
+                externalUrl: profileInfo.externalUrl || '',
+                isPrivate: !!profileInfo.isPrivate,
+                isVerified: !!profileInfo.isVerified,
+                followerCount: profileInfo.followerCount || 0,
+                followingCount: profileInfo.followingCount || 0,
+                postCount: profileInfo.postCount || 0,
+              });
+              if (changes.length > 0) {
+                const changeList = changes.map(c => c.label).join(', ');
+                this.notify(`Profile changes detected: ${changeList}`, 'warning');
+                await SocialShieldStorage.saveAlert({
+                  type: 'profile_change',
+                  severity: 'warning',
+                  title: 'Profile Changes Detected',
+                  message: `@${profile}: ${changeList} changed since last capture`,
+                  platform: 'instagram',
+                  username: profile,
+                  details: changes
+                });
+              }
+            }
+          } catch (e) {
+            console.warn('[SocialShield] Profile tracking error:', e);
+          }
         } else {
           this.notify('No users captured. The list might be empty or private.', 'warning');
         }
@@ -649,6 +704,98 @@
       };
     },
 
+    // ==================== Engagement Rate ====================
+
+    async runEngagementRate(profile) {
+      this.notify('Calculating engagement rate...', 'info');
+      try {
+        const profileInfo = await chrome.runtime.sendMessage({
+          type: 'FETCH_PROFILE_INFO', username: profile
+        });
+        if (!profileInfo) {
+          this.notify('Could not fetch profile info.', 'error');
+          return;
+        }
+
+        const engagement = SocialShieldScanner.calculateEngagement({
+          followerCount: profileInfo.followerCount,
+          followingCount: profileInfo.followingCount,
+          postCount: profileInfo.postCount,
+        });
+
+        const qualityLabels = {
+          excellent: '🟢 Excellent', good: '🟢 Good', average: '🟡 Average',
+          low: '🔴 Low', suspicious_high: '🔴 Suspiciously High',
+          no_data: '⚪ No Data', no_followers: '⚪ No Followers'
+        };
+
+        const lines = [
+          `Engagement: ${qualityLabels[engagement.quality] || engagement.quality}`,
+          `Follower/Following Ratio: ${engagement.followerFollowingRatio}`,
+          `Posts: ${profileInfo.postCount} | Followers: ${profileInfo.followerCount} | Following: ${profileInfo.followingCount}`,
+        ];
+        if (engagement.flags.length > 0) {
+          lines.push(`Flags: ${engagement.flags.join('; ')}`);
+        }
+        this.notify(lines.join('\n'), engagement.flags.length > 0 ? 'warning' : 'success');
+      } catch (err) {
+        console.error('[SocialShield] Engagement rate error:', err);
+        this.notify('Error calculating engagement rate.', 'error');
+      }
+    },
+
+    // ==================== Impersonation Check ====================
+
+    async runImpersonationCheck(profile) {
+      this.notify('Checking for impersonation accounts...', 'info');
+      try {
+        const profileInfo = await chrome.runtime.sendMessage({
+          type: 'FETCH_PROFILE_INFO', username: profile
+        });
+        const displayName = profileInfo?.fullName || '';
+
+        // Lấy followers gần nhất từ storage
+        const followers = await SocialShieldStorage.getSnapshots('instagram', profile, 'followers');
+        const following = await SocialShieldStorage.getSnapshots('instagram', profile, 'following');
+        const latestFollowers = followers.length > 0 ? followers[followers.length - 1].data : [];
+        const latestFollowing = following.length > 0 ? following[following.length - 1].data : [];
+        const allUsers = [...latestFollowers, ...latestFollowing];
+
+        if (allUsers.length === 0) {
+          this.notify('No captured data. Capture followers/following first!', 'warning');
+          return;
+        }
+
+        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers);
+
+        if (suspects.length === 0) {
+          this.notify(`No impersonation accounts found among ${allUsers.length} users.`, 'success');
+        } else {
+          const top3 = suspects.slice(0, 3).map(s =>
+            `@${s.username} (${s.impersonationScore}%)`
+          ).join(', ');
+          this.notify(
+            `Found ${suspects.length} suspected impersonation account(s): ${top3}. Check dashboard for details.`,
+            'warning'
+          );
+          await SocialShieldStorage.saveAlert({
+            type: 'impersonation',
+            severity: 'danger',
+            title: 'Impersonation Accounts Detected',
+            message: `${suspects.length} account(s) may be impersonating @${profile}`,
+            platform: 'instagram',
+            username: profile,
+            details: suspects.slice(0, 10).map(s => ({
+              username: s.username, score: s.impersonationScore, reasons: s.impersonationReasons
+            }))
+          });
+        }
+      } catch (err) {
+        console.error('[SocialShield] Impersonation check error:', err);
+        this.notify('Error checking for impersonation.', 'error');
+      }
+    },
+
     // ==================== Link Scan ====================
 
     async runLinkScan() {
@@ -708,6 +855,75 @@
       });
     },
 
+    // ==================== Comment/DM Scam Scanner ====================
+
+    /**
+     * Tự động quét comments visible trên trang, overlay cảnh báo scam
+     * Dùng MutationObserver để quét comments mới load
+     */
+    startCommentScanner() {
+      const scannedElements = new WeakSet();
+
+      const scanComment = (el) => {
+        if (scannedElements.has(el)) return;
+        scannedElements.add(el);
+
+        const text = el.innerText || el.textContent || '';
+        if (text.length < 10) return;
+
+        const result = SocialShieldTextAnalyzer.analyzeTextRuleBased(text);
+        if (result.classification === 'safe') return;
+
+        // Overlay warning badge
+        el.style.position = 'relative';
+        const badge = document.createElement('div');
+        badge.className = 'ss-scam-badge';
+        badge.title = result.reasoning;
+        badge.innerHTML = result.classification === 'scam'
+          ? '🚨 <span>Scam</span>'
+          : '⚠️ <span>Suspicious</span>';
+        badge.style.cssText = `
+          position: absolute; top: -2px; right: -2px; z-index: 9999;
+          background: ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'};
+          color: white; font-size: 10px; font-weight: 600; padding: 2px 6px;
+          border-radius: 4px; cursor: help; display: flex; align-items: center; gap: 3px;
+          font-family: -apple-system, sans-serif; line-height: 1.2;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        `;
+        badge.querySelector('span').style.cssText = 'font-size: 10px;';
+        el.style.outline = `1px solid ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'}`;
+        el.style.outlineOffset = '2px';
+        el.style.borderRadius = '4px';
+        el.appendChild(badge);
+      };
+
+      const scanAllComments = () => {
+        // Instagram comments sử dụng nhiều selectors
+        const commentSelectors = [
+          'ul li span[dir]',                        // Comment text
+          '[class*="Comment"] span',                 // Comment spans
+          'div[role="button"] + span',               // Reply text
+        ];
+        for (const sel of commentSelectors) {
+          document.querySelectorAll(sel).forEach(el => {
+            if (el.closest('.ss-scam-badge')) return; // skip badge elements
+            if (el.innerText && el.innerText.length > 15) scanComment(el);
+          });
+        }
+      };
+
+      // Scan khi page load
+      setTimeout(scanAllComments, 3000);
+
+      // Observe DOM changes cho comments mới (debounced)
+      let debounceTimer = null;
+      const observer = new MutationObserver(() => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(scanAllComments, 500);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    },
+
     // ==================== URL Observer ====================
 
     getCurrentProfile() {
@@ -756,6 +972,7 @@
           case 'GET_PAGE_INFO':
             sendResponse({
               url: location.href,
+              platform: 'instagram',
               profile: this.getCurrentProfile(),
               isProfilePage: !!this.getCurrentProfile(),
               isCapturing: this.isCapturing

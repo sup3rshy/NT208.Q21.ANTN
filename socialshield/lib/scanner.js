@@ -113,8 +113,7 @@ const SocialShieldScanner = {
       }
     }
 
-    // Bank account numbers (Vietnamese)
-    const bankPattern = /\b\d{9,19}\b/g;
+    // Bank account numbers (Vietnamese) - chỉ match khi có context
     const bankContext = text.match(/(?:stk|số tài khoản|account\s*(?:number|no)|bank\s*account)[:\s]*(\d{9,19})/gi);
     if (bankContext) {
       findings.push({
@@ -729,5 +728,174 @@ const SocialShieldScanner = {
     analysis.riskScore = Math.min(analysis.riskScore, 100);
 
     return analysis;
+  },
+
+  // ==================== Engagement Rate Calculator ====================
+
+  /**
+   * Tính engagement rate và phân tích chất lượng tương tác
+   * @param {Object} profileData - { followerCount, followingCount, postCount, totalLikes, totalComments }
+   * @returns {Object} engagement analysis
+   */
+  calculateEngagement(profileData) {
+    const { followerCount = 0, followingCount = 0, postCount = 0,
+            totalLikes = 0, totalComments = 0, recentPosts = [] } = profileData;
+
+    const result = {
+      engagementRate: 0,
+      avgLikes: 0,
+      avgComments: 0,
+      quality: 'unknown',
+      flags: [],
+      followerFollowingRatio: 0,
+      postsPerFollower: 0,
+    };
+
+    if (followerCount === 0) {
+      result.quality = 'no_followers';
+      return result;
+    }
+
+    // Tính engagement rate từ recent posts nếu có
+    if (recentPosts.length > 0) {
+      const totalEng = recentPosts.reduce((sum, p) => sum + (p.likes || 0) + (p.comments || 0), 0);
+      result.engagementRate = parseFloat(((totalEng / recentPosts.length / followerCount) * 100).toFixed(2));
+      result.avgLikes = Math.round(recentPosts.reduce((s, p) => s + (p.likes || 0), 0) / recentPosts.length);
+      result.avgComments = Math.round(recentPosts.reduce((s, p) => s + (p.comments || 0), 0) / recentPosts.length);
+    } else if (totalLikes > 0 && postCount > 0) {
+      // Fallback: dùng tổng likes/comments chia cho số posts
+      const avgEng = (totalLikes + totalComments) / postCount;
+      result.engagementRate = parseFloat(((avgEng / followerCount) * 100).toFixed(2));
+      result.avgLikes = Math.round(totalLikes / postCount);
+      result.avgComments = Math.round(totalComments / postCount);
+    }
+
+    // Follower/Following ratio
+    result.followerFollowingRatio = parseFloat((followerCount / Math.max(followingCount, 1)).toFixed(2));
+    result.postsPerFollower = parseFloat((postCount / Math.max(followerCount, 1)).toFixed(3));
+
+    // Phân tích chất lượng engagement
+    const er = result.engagementRate;
+    if (er > 10) {
+      result.quality = 'suspicious_high';
+      result.flags.push('Unusually high engagement rate - possible engagement pods or bots');
+    } else if (er >= 3) {
+      result.quality = 'excellent';
+    } else if (er >= 1) {
+      result.quality = 'good';
+    } else if (er >= 0.5) {
+      result.quality = 'average';
+    } else if (er > 0) {
+      result.quality = 'low';
+      result.flags.push('Low engagement rate may indicate fake/bought followers');
+    } else {
+      result.quality = 'no_data';
+    }
+
+    // Thêm flags cho anomalies
+    if (followingCount > 0 && followerCount / followingCount > 100) {
+      result.flags.push('Very high follower/following ratio - possible celebrity or public figure');
+    }
+    if (followingCount > 5000 && followerCount < 500) {
+      result.flags.push('Mass following with few followers - possible spam account');
+    }
+    if (postCount === 0 && followerCount > 100) {
+      result.flags.push('No posts but has followers - unusual pattern');
+    }
+
+    return result;
+  },
+
+  // ==================== Impersonation Detection ====================
+
+  /**
+   * Phát hiện tài khoản nghi giả mạo trong danh sách followers/following
+   * @param {string} targetUsername - username gốc
+   * @param {string} targetDisplayName - display name gốc
+   * @param {Array} users - danh sách users cần kiểm tra
+   * @returns {Array} danh sách tài khoản nghi giả mạo
+   */
+  detectImpersonation(targetUsername, targetDisplayName, users) {
+    if (!targetUsername || !users || users.length === 0) return [];
+
+    const suspects = [];
+    const targetLower = targetUsername.toLowerCase();
+    const targetNameLower = (targetDisplayName || '').toLowerCase();
+
+    for (const user of users) {
+      const uname = (user.username || '').toLowerCase();
+      const dname = (user.displayName || '').toLowerCase();
+      let score = 0;
+      const reasons = [];
+
+      // 1. Username tương tự (Levenshtein-like simple check)
+      if (uname !== targetLower) {
+        // Chứa username gốc + thêm ký tự
+        if (uname.includes(targetLower) || targetLower.includes(uname)) {
+          if (Math.abs(uname.length - targetLower.length) <= 4) {
+            score += 30;
+            reasons.push('Username very similar to target');
+          }
+        }
+        // Thay thế ký tự phổ biến (l→1, o→0, i→1)
+        const normalized = uname.replace(/[01]/g, m => m === '0' ? 'o' : 'l').replace(/_+/g, '');
+        const targetNorm = targetLower.replace(/[01]/g, m => m === '0' ? 'o' : 'l').replace(/_+/g, '');
+        if (normalized === targetNorm && uname !== targetLower) {
+          score += 40;
+          reasons.push('Username is a character-swap variant of target');
+        }
+        // Username chỉ khác 1-2 ký tự
+        if (uname.length === targetLower.length) {
+          let diffCount = 0;
+          for (let i = 0; i < uname.length; i++) {
+            if (uname[i] !== targetLower[i]) diffCount++;
+          }
+          if (diffCount <= 2 && diffCount > 0) {
+            score += 35;
+            reasons.push(`Username differs by only ${diffCount} character(s)`);
+          }
+        }
+        // Thêm prefix/suffix phổ biến: real_, official_, _official, _backup
+        const impersonationAffixes = ['real', 'official', 'backup', 'original', 'the', 'its', 'im', 'iam'];
+        for (const affix of impersonationAffixes) {
+          if (uname === affix + targetLower || uname === targetLower + affix ||
+              uname === affix + '_' + targetLower || uname === targetLower + '_' + affix ||
+              uname === affix + '.' + targetLower || uname === targetLower + '.' + affix) {
+            score += 35;
+            reasons.push(`Username uses impersonation pattern: "${affix}"`);
+            break;
+          }
+        }
+      }
+
+      // 2. Display name giống hệt hoặc tương tự target
+      if (targetNameLower && dname) {
+        if (dname === targetNameLower) {
+          score += 25;
+          reasons.push('Display name identical to target');
+        } else if (dname.includes(targetNameLower) || targetNameLower.includes(dname)) {
+          if (dname.length > 3) {
+            score += 15;
+            reasons.push('Display name contains target name');
+          }
+        }
+      }
+
+      // 3. No profile pic + similar name = stronger signal
+      if (user.hasAnonymousProfilePic && score > 0) {
+        score += 10;
+        reasons.push('No profile picture (stronger impersonation signal)');
+      }
+
+      if (score >= 30) {
+        suspects.push({
+          ...user,
+          impersonationScore: Math.min(score, 100),
+          impersonationReasons: reasons,
+        });
+      }
+    }
+
+    return suspects.sort((a, b) => b.impersonationScore - a.impersonationScore);
   }
 };

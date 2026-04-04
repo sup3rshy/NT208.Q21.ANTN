@@ -35,6 +35,10 @@
           <span class="ss-nav-icon">🔍</span>
           <span>Privacy Scans</span>
         </a>
+        <a class="ss-nav-item" data-page="security" href="#">
+          <span class="ss-nav-icon">🛡️</span>
+          <span>Security Score</span>
+        </a>
         <a class="ss-nav-item" data-page="alerts" href="#">
           <span class="ss-nav-icon">🔔</span>
           <span>Alerts</span>
@@ -219,6 +223,46 @@
         </div>
       </div>
 
+      <!-- Security Score Page -->
+      <div class="ss-page" id="page-security">
+        <div class="ss-page-header">
+          <h1>Security Score</h1>
+          <p class="ss-page-desc">Overall security assessment across all tracked profiles</p>
+        </div>
+
+        <div id="security-score-container">
+          <div class="ss-card" style="text-align: center; padding: 32px;">
+            <div id="security-score-circle" style="display: inline-block; width: 140px; height: 140px; border-radius: 50%; border: 8px solid #333; position: relative; margin-bottom: 16px;">
+              <div id="security-score-value" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 36px; font-weight: 700; color: var(--text-primary);">--</div>
+            </div>
+            <div id="security-score-label" style="font-size: 18px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">Loading...</div>
+            <div id="security-score-subtitle" style="font-size: 13px; color: var(--text-secondary);"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>Score Breakdown</h2></div>
+          <div class="ss-card-body" id="security-breakdown"></div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>Profile Changes History</h2></div>
+          <div class="ss-card-body" id="profile-changes-list"></div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Security Recommendations</h2>
+          </div>
+          <div class="ss-card-body" id="security-recommendations"></div>
+        </div>
+
+        <div style="padding: 16px; display: flex; gap: 8px;">
+          <button class="ss-btn ss-btn-primary" id="btn-export-report" style="flex:1;">Export Security Report (CSV)</button>
+          <button class="ss-btn" id="btn-export-report-json" style="flex:1;">Export Full Data (JSON)</button>
+        </div>
+      </div>
+
       <!-- Alerts Page -->
       <div class="ss-page" id="page-alerts">
         <div class="ss-page-header">
@@ -321,7 +365,6 @@
                 <span class="ss-toggle-slider"></span>
               </label>
             </div>
-            <button class="ss-btn ss-btn-primary" id="btn-save-settings">Save Settings</button>
           </div>
         </div>
 
@@ -380,6 +423,10 @@
               <button class="ss-btn ss-btn-sm" id="btn-test-ai">Test</button>
             </div>
           </div>
+        </div>
+
+        <div style="padding: 0 16px 16px;">
+          <button class="ss-btn ss-btn-primary" id="btn-save-settings" style="width: 100%;">Save All Settings</button>
         </div>
 
         <div class="ss-card">

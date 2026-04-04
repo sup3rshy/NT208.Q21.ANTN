@@ -3,7 +3,12 @@
     "allow": [
       "Bash(npm install:*)",
       "Bash(/tmp/commit_msg.txt:*)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(\"D:\\\\laptrinhweb\\\\extensions\\\\socialshield\\\\server\\\\.env.example\":*)",
+      "Bash(node -e \":*)",
+      "Bash(netstat -ano)",
+      "Bash(\"D:\\\\laptrinhweb\\\\extensions\\\\socialshield\\\\.gitignore\":*)",
+      "WebSearch"
     ]
   }
 }

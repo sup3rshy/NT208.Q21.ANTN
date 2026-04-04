@@ -50,6 +50,7 @@
         case 'privacy': this.loadPrivacyScans(); break;
         case 'alerts': this.loadAlerts(); break;
         case 'settings': this.loadSettings(); break;
+        case 'security': this.loadSecurityScore(); break;
       }
     },
 
@@ -90,10 +91,11 @@
 
       for (const group of groups) {
         if (group.latestSnapshot) {
+          const pLabel = group.platform === 'twitter' ? 'Twitter/X' : 'Instagram';
           activities.push({
             type: 'snapshot',
-            icon: '📸',
-            message: `Captured ${group.latestSnapshot.count} ${group.type} for @${group.username}`,
+            icon: group.platform === 'twitter' ? '🐦' : '📷',
+            message: `[${pLabel}] Captured ${group.latestSnapshot.count} ${group.type} for @${group.username}`,
             timestamp: group.latestSnapshot.timestamp,
             platform: group.platform
           });
@@ -118,7 +120,7 @@
         container.innerHTML = `
           <div class="ss-empty-state">
             <div class="ss-empty-icon">🛡️</div>
-            <p>No activity yet. Navigate to Instagram and capture your first snapshot!</p>
+            <p>No activity yet. Navigate to Instagram or Twitter/X and capture your first snapshot!</p>
           </div>
         `;
         return;
@@ -150,7 +152,7 @@
         const snapshots = await SocialShieldStorage.getSnapshots(group.platform, group.username, group.type);
         if (snapshots.length >= 2) {
           validGroups.push({ ...group, snapshots });
-          const label = `@${group.username} - ${group.type}`;
+          const label = `@${group.username} - ${group.type} (${this.platformLabel(group.platform)})`;
           profileSelect.add(new Option(label, group.key));
         }
       }
@@ -286,9 +288,9 @@
         html += `
           <div class="ss-snapshot-group">
             <div class="ss-snapshot-group-header">
-              <span>@${this.escapeHtml(group.username)}</span>
+              <span>${this.platformIcon(group.platform)} @${this.escapeHtml(group.username)}</span>
               <span style="color: var(--text-secondary); font-weight: 400; font-size: 12px;">
-                ${group.type} &middot; ${group.platform}
+                ${group.type} &middot; ${this.platformLabel(group.platform)}
               </span>
             </div>
             ${snapshots.map((snap, i) => {
@@ -378,7 +380,7 @@
         </div>
       `;
 
-      title.textContent = `@${snap.username} - ${snap.type} (${snap.count})`;
+      title.textContent = `${this.platformIcon(snap.platform)} @${snap.username} - ${snap.type} (${snap.count}) · ${this.platformLabel(snap.platform)}`;
       body.innerHTML = `
         <div style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">
           Captured: ${this.formatDate(snap.timestamp)}
@@ -388,9 +390,9 @@
           ${snap.data.map(user => {
             const bot = SocialShieldDiff.scoreBotLikelihood(user);
             const botTag = bot.isLikelyBot
-              ? `<span style="background: rgba(239,68,68,0.15); color: #ef4444; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px;" title="${bot.reasons.join(', ')}">BOT ${bot.score}%</span>`
+              ? `<span style="background: rgba(239,68,68,0.15); color: #ef4444; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px;" title="${this.escapeHtml(bot.reasons.join(', '))}">BOT ${bot.score}%</span>`
               : '';
-            const userUrl = user.profileUrl || `https://www.instagram.com/${user.username}/`;
+            const userUrl = this.safeHref(user.profileUrl) !== '#' ? this.safeHref(user.profileUrl) : this.profileUrl(user.username, snap.platform);
             return `
               <div class="ss-user-item" ${bot.isLikelyBot ? 'style="border-left: 2px solid #ef4444; padding-left: 8px;"' : ''}>
                 <a class="ss-user-link" href="${userUrl}" target="_blank">
@@ -445,7 +447,7 @@
 
       for (const group of validGroups) {
         const count = this.snapshotCache[group.key]?.length || 0;
-        const label = `@${group.username} - ${group.type} (${count} snapshots)`;
+        const label = `@${group.username} - ${group.type} (${count} snapshots) · ${this.platformLabel(group.platform)}`;
         profileSelect.add(new Option(label, group.key));
       }
 
@@ -529,7 +531,7 @@
             @${this.escapeHtml(oldSnap.username)}
           </div>
           <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
-            ${oldSnap.type} &middot; ${oldSnap.platform}
+            ${oldSnap.type} &middot; ${this.platformLabel(oldSnap.platform)}
           </div>
         </div>
       ` : '';
@@ -582,7 +584,7 @@
             </div>
             <div class="ss-user-list">
               ${diff.added.map(u => {
-                const addedUrl = u.profileUrl || `https://www.instagram.com/${u.username}/`;
+                const addedUrl = this.safeHref(u.profileUrl) !== '#' ? this.safeHref(u.profileUrl) : this.profileUrl(u.username, oldSnap.platform);
                 return `
                 <div class="ss-user-item ss-user-item-added">
                   <a class="ss-user-link" href="${addedUrl}" target="_blank">@${this.escapeHtml(u.username)}</a>
@@ -600,7 +602,7 @@
             </div>
             <div class="ss-user-list">
               ${diff.removed.map(u => {
-                const removedUrl = u.profileUrl || `https://www.instagram.com/${u.username}/`;
+                const removedUrl = this.safeHref(u.profileUrl) !== '#' ? this.safeHref(u.profileUrl) : this.profileUrl(u.username, oldSnap.platform);
                 return `
                 <div class="ss-user-item ss-user-item-removed">
                   <a class="ss-user-link" href="${removedUrl}" target="_blank">@${this.escapeHtml(u.username)}</a>
@@ -643,14 +645,14 @@
       let html = '';
       for (const key of privacyKeys) {
         const scans = allData[key] || [];
-        for (const scan of scans.reverse()) {
+        for (const scan of [...scans].reverse()) {
           const riskClass = `ss-risk-${scan.riskScore >= 50 ? 'critical' : scan.riskScore >= 30 ? 'high' : scan.riskScore >= 15 ? 'medium' : 'low'}`;
           const riskLabel = scan.riskScore >= 50 ? 'Critical' : scan.riskScore >= 30 ? 'High' : scan.riskScore >= 15 ? 'Medium' : 'Low';
 
           html += `
             <div class="ss-privacy-card">
               <div class="ss-privacy-header">
-                <span class="ss-privacy-profile">@${this.escapeHtml(scan.username)} (${scan.platform})</span>
+                <span class="ss-privacy-profile">${this.platformIcon(scan.platform)} @${this.escapeHtml(scan.username)} (${this.platformLabel(scan.platform)})</span>
                 <span class="ss-privacy-risk ${riskClass}">${riskLabel} Risk (${scan.riskScore})</span>
               </div>
               <div class="ss-alert-card-time" style="margin-bottom: 10px;">${this.formatDate(scan.timestamp)}</div>
@@ -700,7 +702,7 @@
               <div class="ss-alert-card-profile" style="font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 2px;">
                 @${this.escapeHtml(alert.username)}
                 <span style="color: var(--text-secondary); font-weight: 400;">
-                  &middot; ${this.escapeHtml(alert.snapshotType || '')} &middot; ${this.escapeHtml(alert.platform || '')}
+                  &middot; ${this.escapeHtml(alert.snapshotType || '')} &middot; ${this.platformLabel(alert.platform || '')}
                 </span>
               </div>
             ` : ''}
@@ -710,6 +712,270 @@
           </div>
         </div>
       `).join('');
+    },
+
+    // ==================== Security Score Page ====================
+
+    async loadSecurityScore() {
+      const allData = await SocialShieldStorage.getAll();
+      const snapshotKeys = Object.keys(allData).filter(k => k.startsWith('snapshots_'));
+      const privacyKeys = Object.keys(allData).filter(k => k.startsWith('privacy_'));
+      const profileKeys = Object.keys(allData).filter(k => k.startsWith('profile_'));
+      const alerts = allData.alerts || [];
+
+      let score = 100; // Start perfect, deduct for issues
+      const breakdown = [];
+
+      // 1. Privacy findings penalty
+      let totalFindings = 0;
+      let criticalFindings = 0;
+      for (const key of privacyKeys) {
+        const scans = allData[key] || [];
+        if (scans.length > 0) {
+          const latest = scans[scans.length - 1];
+          for (const f of (latest.results || [])) {
+            totalFindings++;
+            if (f.severity === 'critical') { score -= 15; criticalFindings++; }
+            else if (f.severity === 'high') score -= 8;
+            else if (f.severity === 'medium') score -= 4;
+            else score -= 2;
+          }
+        }
+      }
+      breakdown.push({
+        label: 'Privacy Issues',
+        detail: totalFindings === 0 ? 'No PII exposed' : `${totalFindings} issue(s) found (${criticalFindings} critical)`,
+        status: totalFindings === 0 ? 'good' : criticalFindings > 0 ? 'bad' : 'warn'
+      });
+
+      // 2. Unresolved alerts penalty
+      const unreadAlerts = alerts.filter(a => !a.read).length;
+      const dangerAlerts = alerts.filter(a => a.severity === 'danger' && !a.read).length;
+      score -= unreadAlerts * 3;
+      score -= dangerAlerts * 5;
+      breakdown.push({
+        label: 'Active Alerts',
+        detail: unreadAlerts === 0 ? 'All alerts resolved' : `${unreadAlerts} unresolved (${dangerAlerts} critical)`,
+        status: unreadAlerts === 0 ? 'good' : dangerAlerts > 0 ? 'bad' : 'warn'
+      });
+
+      // 3. Bot ratio check
+      let worstBotRatio = 0;
+      for (const key of snapshotKeys) {
+        const snapshots = allData[key] || [];
+        if (snapshots.length > 0) {
+          const latest = snapshots[snapshots.length - 1];
+          const ba = SocialShieldDiff.analyzeBots(latest.data || []);
+          if (ba.botRatio > worstBotRatio) worstBotRatio = ba.botRatio;
+        }
+      }
+      if (worstBotRatio > 30) score -= 15;
+      else if (worstBotRatio > 10) score -= 5;
+      breakdown.push({
+        label: 'Bot Exposure',
+        detail: worstBotRatio === 0 ? 'No bots detected' : `Worst bot ratio: ${worstBotRatio}%`,
+        status: worstBotRatio <= 10 ? 'good' : worstBotRatio <= 30 ? 'warn' : 'bad'
+      });
+
+      // 4. Profile changes
+      let totalChanges = 0;
+      for (const key of profileKeys) {
+        const history = allData[key] || [];
+        for (const entry of history) {
+          totalChanges += (entry.changes || []).length;
+        }
+      }
+      if (totalChanges > 5) score -= 5;
+      breakdown.push({
+        label: 'Profile Stability',
+        detail: totalChanges === 0 ? 'No profile changes detected' : `${totalChanges} change(s) tracked`,
+        status: totalChanges <= 2 ? 'good' : totalChanges <= 5 ? 'warn' : 'bad'
+      });
+
+      // 5. Monitoring coverage
+      const hasRecentCapture = snapshotKeys.some(k => {
+        const snaps = allData[k] || [];
+        if (snaps.length === 0) return false;
+        const latest = snaps[snaps.length - 1];
+        return (Date.now() - (latest.createdAt || 0)) < 7 * 24 * 60 * 60 * 1000; // 7 days
+      });
+      if (!hasRecentCapture && snapshotKeys.length > 0) score -= 10;
+      breakdown.push({
+        label: 'Monitoring Freshness',
+        detail: hasRecentCapture ? 'Recent captures available' : snapshotKeys.length === 0 ? 'No captures yet' : 'No captures in last 7 days',
+        status: hasRecentCapture ? 'good' : 'warn'
+      });
+
+      score = Math.max(0, Math.min(100, score));
+
+      // Render score
+      const scoreEl = document.getElementById('security-score-value');
+      const labelEl = document.getElementById('security-score-label');
+      const subtitleEl = document.getElementById('security-score-subtitle');
+      const circleEl = document.getElementById('security-score-circle');
+
+      scoreEl.textContent = score;
+      const color = score >= 80 ? '#10b981' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
+      const label = score >= 80 ? 'Excellent' : score >= 60 ? 'Good' : score >= 40 ? 'Needs Attention' : 'At Risk';
+      labelEl.textContent = label;
+      labelEl.style.color = color;
+      scoreEl.style.color = color;
+      circleEl.style.borderColor = color;
+      subtitleEl.textContent = `Based on ${snapshotKeys.length} capture group(s), ${privacyKeys.length} scan(s), ${alerts.length} alert(s)`;
+
+      // Render breakdown
+      const breakdownEl = document.getElementById('security-breakdown');
+      breakdownEl.innerHTML = breakdown.map(b => {
+        const icon = b.status === 'good' ? '✅' : b.status === 'warn' ? '⚠️' : '❌';
+        const barColor = b.status === 'good' ? '#10b981' : b.status === 'warn' ? '#f59e0b' : '#ef4444';
+        return `
+          <div style="display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <span style="font-size: 18px; margin-right: 12px;">${icon}</span>
+            <div style="flex: 1;">
+              <div style="font-weight: 600; color: var(--text-primary); font-size: 14px;">${this.escapeHtml(b.label)}</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">${this.escapeHtml(b.detail)}</div>
+            </div>
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${barColor};"></div>
+          </div>
+        `;
+      }).join('');
+
+      // Render profile changes
+      await this.renderProfileChanges(allData, profileKeys);
+
+      // Render recommendations
+      this.renderSecurityRecommendations(score, breakdown, allData);
+    },
+
+    async renderProfileChanges(allData, profileKeys) {
+      const container = document.getElementById('profile-changes-list');
+      const allChanges = [];
+
+      for (const key of profileKeys) {
+        const history = allData[key] || [];
+        const parts = key.replace('profile_', '').split('_');
+        const platform = parts[0];
+        const username = parts.slice(1).join('_');
+
+        for (const entry of history) {
+          if (entry.changes && entry.changes.length > 0) {
+            allChanges.push({ platform, username, timestamp: entry.timestamp, changes: entry.changes });
+          }
+        }
+      }
+
+      allChanges.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+      if (allChanges.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px; padding: 8px 0;">No profile changes recorded yet.</div>';
+        return;
+      }
+
+      container.innerHTML = allChanges.slice(0, 20).map(c => `
+        <div style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+            <span style="font-weight: 600; color: var(--accent);">${this.platformIcon(c.platform)} @${this.escapeHtml(c.username)} <span style="color: var(--text-secondary); font-weight: 400; font-size: 12px;">${this.platformLabel(c.platform)}</span></span>
+            <span style="font-size: 12px; color: var(--text-secondary);">${this.formatDate(c.timestamp)}</span>
+          </div>
+          ${c.changes.map(ch => `
+            <div style="font-size: 12px; padding: 4px 0 4px 16px; color: var(--text-secondary);">
+              <strong>${this.escapeHtml(ch.label)}:</strong>
+              <span style="color: #ef4444; text-decoration: line-through;">${this.escapeHtml(String(ch.oldValue).substring(0, 60))}</span>
+              → <span style="color: #10b981;">${this.escapeHtml(String(ch.newValue).substring(0, 60))}</span>
+            </div>
+          `).join('')}
+        </div>
+      `).join('');
+    },
+
+    renderSecurityRecommendations(score, breakdown, allData) {
+      const container = document.getElementById('security-recommendations');
+      const recs = [];
+
+      if (breakdown.find(b => b.label === 'Privacy Issues' && b.status !== 'good')) {
+        recs.push({ icon: '🔒', text: 'Remove exposed personal information from your social media profiles', priority: 'high' });
+      }
+      if (breakdown.find(b => b.label === 'Active Alerts' && b.status !== 'good')) {
+        recs.push({ icon: '🔔', text: 'Review and resolve pending security alerts', priority: 'high' });
+      }
+      if (breakdown.find(b => b.label === 'Bot Exposure' && b.status !== 'good')) {
+        recs.push({ icon: '🤖', text: 'Review and remove suspected bot followers to improve account quality', priority: 'medium' });
+      }
+      if (breakdown.find(b => b.label === 'Monitoring Freshness' && b.status !== 'good')) {
+        recs.push({ icon: '📸', text: 'Run a new capture to keep monitoring data up to date', priority: 'medium' });
+      }
+      recs.push({ icon: '🛡️', text: 'Enable two-factor authentication on all social media accounts', priority: 'medium' });
+      recs.push({ icon: '🔑', text: 'Use unique passwords for each social media platform', priority: 'low' });
+      if (score < 60) {
+        recs.push({ icon: '⚡', text: 'Consider switching accounts to private mode to reduce exposure', priority: 'high' });
+      }
+
+      const priorityColors = { high: '#ef4444', medium: '#f59e0b', low: '#8888aa' };
+      container.innerHTML = recs.map(r => `
+        <div style="display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+          <span style="font-size: 18px; margin-right: 12px;">${r.icon}</span>
+          <div style="flex: 1; font-size: 13px; color: var(--text-primary);">${this.escapeHtml(r.text)}</div>
+          <span style="font-size: 10px; font-weight: 600; color: ${priorityColors[r.priority]}; text-transform: uppercase;">${r.priority}</span>
+        </div>
+      `).join('');
+    },
+
+    // ==================== Export Reports ====================
+
+    async exportSecurityReportCSV() {
+      const allData = await SocialShieldStorage.getAll();
+      const rows = [['Type', 'Platform', 'Username', 'Severity', 'Title', 'Message', 'Timestamp']];
+
+      // Privacy findings
+      const privacyKeys = Object.keys(allData).filter(k => k.startsWith('privacy_'));
+      for (const key of privacyKeys) {
+        const scans = allData[key] || [];
+        for (const scan of scans) {
+          for (const f of (scan.results || [])) {
+            rows.push(['Privacy', scan.platform, scan.username, f.severity, f.title, f.message, scan.timestamp]);
+          }
+        }
+      }
+
+      // Alerts
+      for (const alert of (allData.alerts || [])) {
+        rows.push(['Alert', alert.platform || '', alert.username || '', alert.severity, alert.title || alert.type, alert.message, alert.timestamp]);
+      }
+
+      // Profile changes
+      const profileKeys = Object.keys(allData).filter(k => k.startsWith('profile_'));
+      for (const key of profileKeys) {
+        const history = allData[key] || [];
+        const parts = key.replace('profile_', '').split('_');
+        const platform = parts[0];
+        const username = parts.slice(1).join('_');
+        for (const entry of history) {
+          for (const ch of (entry.changes || [])) {
+            rows.push(['ProfileChange', platform, username, 'info', ch.label, `${ch.oldValue} → ${ch.newValue}`, entry.timestamp]);
+          }
+        }
+      }
+
+      // Bot summary per snapshot
+      const snapshotKeys = Object.keys(allData).filter(k => k.startsWith('snapshots_'));
+      for (const key of snapshotKeys) {
+        const snapshots = allData[key] || [];
+        if (snapshots.length > 0) {
+          const latest = snapshots[snapshots.length - 1];
+          const ba = SocialShieldDiff.analyzeBots(latest.data || []);
+          rows.push(['BotAnalysis', latest.platform, latest.username, ba.botRatio > 30 ? 'high' : 'low',
+            `${latest.type} bot ratio`, `${ba.botCount}/${ba.totalAnalyzed} (${ba.botRatio}%)`, latest.timestamp]);
+        }
+      }
+
+      const csv = rows.map(r => r.map(c => `"${String(c || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `socialshield-report-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     },
 
     // ==================== Settings Page ====================
@@ -856,6 +1122,16 @@
       document.getElementById('modal-close').addEventListener('click', () => {
         document.getElementById('snapshot-detail-modal').style.display = 'none';
       });
+
+      // Security Score export buttons
+      const btnExportReport = document.getElementById('btn-export-report');
+      if (btnExportReport) {
+        btnExportReport.addEventListener('click', () => this.exportSecurityReportCSV());
+      }
+      const btnExportJson = document.getElementById('btn-export-report-json');
+      if (btnExportJson) {
+        btnExportJson.addEventListener('click', () => this.exportData());
+      }
     },
 
     // ==================== Utilities ====================
@@ -864,6 +1140,31 @@
       const div = document.createElement('div');
       div.textContent = text || '';
       return div.innerHTML;
+    },
+
+    platformLabel(platform) {
+      const map = { instagram: 'Instagram', twitter: 'Twitter/X' };
+      return map[platform] || platform;
+    },
+
+    platformIcon(platform) {
+      const map = { instagram: '📷', twitter: '🐦' };
+      return map[platform] || '🌐';
+    },
+
+    profileUrl(username, platform) {
+      const u = encodeURIComponent(username);
+      if (platform === 'twitter') return `https://x.com/${u}`;
+      return `https://www.instagram.com/${u}/`;
+    },
+
+    safeHref(url) {
+      if (!url) return '#';
+      try {
+        const u = new URL(url);
+        if (u.protocol === 'https:' || u.protocol === 'http:') return url;
+      } catch {}
+      return '#';
     },
 
     formatDate(timestamp) {

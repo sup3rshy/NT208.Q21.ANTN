@@ -35,7 +35,7 @@ const SocialShieldStorage = {
    */
   async saveSnapshot(platform, username, type, data) {
     const snapshot = {
-      id: `snap_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
       platform,
       username,
       type,
@@ -105,6 +105,62 @@ const SocialShieldStorage = {
     return groups;
   },
 
+  // ==================== Profile Change Tracking ====================
+
+  /**
+   * Lưu profile metadata (bio, displayName, profilePic, externalUrl, isPrivate, isVerified)
+   * So sánh với lần lưu trước để phát hiện thay đổi
+   */
+  async saveProfileSnapshot(platform, username, profileData) {
+    const key = `profile_${platform}_${username}`;
+    const history = await this.get(key) || [];
+
+    const entry = {
+      ...profileData,
+      timestamp: new Date().toISOString(),
+      createdAt: Date.now()
+    };
+
+    // So sánh với entry trước
+    const changes = [];
+    if (history.length > 0) {
+      const prev = history[history.length - 1];
+      const fields = [
+        { key: 'bio', label: 'Bio' },
+        { key: 'displayName', label: 'Display Name' },
+        { key: 'profilePicUrl', label: 'Profile Picture' },
+        { key: 'externalUrl', label: 'External Link' },
+        { key: 'isPrivate', label: 'Account Privacy' },
+        { key: 'isVerified', label: 'Verification Status' },
+      ];
+      for (const f of fields) {
+        const oldVal = prev[f.key];
+        const newVal = entry[f.key];
+        if (oldVal !== undefined && newVal !== undefined && String(oldVal) !== String(newVal)) {
+          changes.push({
+            field: f.key,
+            label: f.label,
+            oldValue: oldVal,
+            newValue: newVal,
+          });
+        }
+      }
+    }
+
+    entry.changes = changes;
+    history.push(entry);
+    // Giữ tối đa 50 entries
+    if (history.length > 50) history.splice(0, history.length - 50);
+    await this.set(key, history);
+
+    return { entry, changes };
+  },
+
+  async getProfileHistory(platform, username) {
+    const key = `profile_${platform}_${username}`;
+    return await this.get(key) || [];
+  },
+
   // ==================== Privacy Scans ====================
 
   async savePrivacyScan(platform, username, results) {
@@ -169,7 +225,7 @@ const SocialShieldStorage = {
   async getSettings() {
     return await this.get('settings') || {
       autoCapture: false,
-      captureInterval: 24, // hours
+      captureInterval: 360, // phút (6 giờ)
       notifications: true,
       suspiciousThreshold: {
         massFollow: 20,
