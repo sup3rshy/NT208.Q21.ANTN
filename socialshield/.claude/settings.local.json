@@ -8,7 +8,11 @@
       "Bash(node -e \":*)",
       "Bash(netstat -ano)",
       "Bash(\"D:\\\\laptrinhweb\\\\extensions\\\\socialshield\\\\.gitignore\":*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:xposedornot.com)",
+      "WebFetch(domain:hackcheck.woventeams.com)",
+      "WebFetch(domain:wiki.leakcheck.io)",
+      "WebFetch(domain:haveibeenpwned.com)"
     ]
   }
 }

@@ -710,22 +710,87 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'CHECK_EMAIL_BREACH':
       (async () => {
+        const email = message.email;
+        if (!email) { sendResponse(null); return; }
         try {
-          const res = await fetch(
-            `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(message.email)}?truncateResponse=true`,
-            { headers: { 'User-Agent': 'SocialShield-Extension' } }
-          );
-          if (res.status === 404) {
-            sendResponse({ breached: false, breachCount: 0, breaches: [] });
-          } else if (res.ok) {
-            const breaches = await res.json();
-            sendResponse({ breached: true, breachCount: breaches.length, breaches: breaches.map(b => b.Name) });
-          } else {
-            sendResponse(null);
+          // 1. XposedOrNot (free, no API key)
+          let result = null;
+          try {
+            const xonRes = await fetch(
+              `https://api.xposedornot.com/v1/check-email/${encodeURIComponent(email)}`,
+              { headers: { 'User-Agent': 'SocialShield-Extension' } }
+            );
+            if (xonRes.status === 404 || xonRes.status === 204) {
+              result = { breached: false, breachCount: 0, breaches: [], source: 'XposedOrNot' };
+            } else if (xonRes.ok) {
+              const data = await xonRes.json();
+              if (data.Error) {
+                result = { breached: false, breachCount: 0, breaches: [], source: 'XposedOrNot' };
+              } else {
+                const list = data.breaches || [];
+                result = list.length > 0
+                  ? { breached: true, breachCount: list.length, breaches: list.slice(0, 20), source: 'XposedOrNot' }
+                  : { breached: false, breachCount: 0, breaches: [], source: 'XposedOrNot' };
+              }
+            }
+          } catch { /* fallthrough */ }
+
+          // 2. HackCheck fallback
+          if (!result) {
+            try {
+              const hcRes = await fetch(
+                `https://hackcheck.woventeams.com/api/v4/breachedaccount/${encodeURIComponent(email)}`,
+                { headers: { 'User-Agent': 'SocialShield-Extension' } }
+              );
+              if (hcRes.status === 404) {
+                result = { breached: false, breachCount: 0, breaches: [], source: 'HackCheck' };
+              } else if (hcRes.ok) {
+                const breaches = await hcRes.json();
+                result = Array.isArray(breaches) && breaches.length > 0
+                  ? { breached: true, breachCount: breaches.length, breaches: breaches.slice(0, 20).map(b => b.Name || b.Title || 'Unknown'), source: 'HackCheck' }
+                  : { breached: false, breachCount: 0, breaches: [], source: 'HackCheck' };
+              }
+            } catch { /* fallthrough */ }
           }
+
+          sendResponse(result || { breached: false, breachCount: 0, breaches: [], source: 'none' });
         } catch (err) {
           console.error('[SocialShield] CHECK_EMAIL_BREACH error:', err);
           sendResponse(null);
+        }
+      })();
+      return true;
+
+    case 'CHECK_PASSWORD_PWNED':
+      (async () => {
+        const password = message.password;
+        if (!password || password.length < 4) { sendResponse({ pwned: false, count: 0 }); return; }
+        try {
+          const encoder = new TextEncoder();
+          const data = encoder.encode(password);
+          const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+          const hashArray = Array.from(new Uint8Array(hashBuffer));
+          const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+          const prefix = hashHex.substring(0, 5);
+          const suffix = hashHex.substring(5);
+
+          const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+            headers: { 'Add-Padding': 'true' }
+          });
+          if (!res.ok) { sendResponse({ pwned: false, count: 0 }); return; }
+
+          const text = await res.text();
+          for (const line of text.split('\n')) {
+            const [hs, count] = line.trim().split(':');
+            if (hs === suffix) {
+              sendResponse({ pwned: true, count: parseInt(count, 10) || 0 });
+              return;
+            }
+          }
+          sendResponse({ pwned: false, count: 0 });
+        } catch (err) {
+          console.error('[SocialShield] CHECK_PASSWORD_PWNED error:', err);
+          sendResponse({ pwned: false, count: 0 });
         }
       })();
       return true;

@@ -200,67 +200,114 @@ const SocialShieldScanner = {
 
   /**
    * Kiểm tra email có bị lộ trong các vụ data breach không
-   * Sử dụng Have I Been Pwned API (free, k-anonymity model)
+   * Chuỗi ưu tiên: XposedOrNot (free) → HackCheck (free) → domain heuristic
    * @param {string} email - email cần kiểm tra
    * @returns {Object|null} kết quả kiểm tra
    */
   async checkEmailBreach(email) {
     if (!email) return null;
 
+    // 1. XposedOrNot API (free, không cần API key)
     try {
-      // HIBP API v3 - breachedaccount endpoint
-      const res = await fetch(
-        `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=true`,
-        {
-          headers: {
-            'User-Agent': 'SocialShield-Extension',
-          }
-        }
-      );
-
-      if (res.status === 404) {
-        return { breached: false, breachCount: 0, breaches: [] };
-      }
-
-      if (res.status === 401) {
-        // API key required - fallback to password hash check
-        return await this.checkEmailBreachFallback(email);
-      }
-
-      if (!res.ok) {
-        console.warn(`[SocialShield] HIBP API error: ${res.status}`);
-        return null;
-      }
-
-      const breaches = await res.json();
-      return {
-        breached: true,
-        breachCount: breaches.length,
-        breaches: breaches.map(b => b.Name),
-      };
+      const xonResult = await this._checkXposedOrNot(email);
+      if (xonResult) return xonResult;
     } catch (err) {
-      console.error('[SocialShield] checkEmailBreach error:', err);
-      return null;
+      console.warn('[SocialShield] XposedOrNot failed, trying fallback:', err.message);
     }
+
+    // 2. HackCheck API (free, CORS enabled)
+    try {
+      const hcResult = await this._checkHackCheck(email);
+      if (hcResult) return hcResult;
+    } catch (err) {
+      console.warn('[SocialShield] HackCheck failed, trying fallback:', err.message);
+    }
+
+    // 3. Domain heuristic fallback
+    return this._checkDomainHeuristic(email);
   },
 
   /**
-   * Fallback: kiểm tra password hash qua HIBP Pwned Passwords API (k-anonymity, no API key)
-   * Kiểm tra xem email prefix có xuất hiện trong các breach dumps phổ biến
+   * XposedOrNot API - free email breach check with rich analytics
+   * Rate limit: 1 req/sec
    */
-  async checkEmailBreachFallback(email) {
-    // Sử dụng heuristic: kiểm tra domain của email
+  async _checkXposedOrNot(email) {
+    const res = await fetch(
+      `https://api.xposedornot.com/v1/check-email/${encodeURIComponent(email)}`,
+      { headers: { 'User-Agent': 'SocialShield-Extension' } }
+    );
+
+    if (res.status === 404 || res.status === 204) {
+      return { breached: false, breachCount: 0, breaches: [], source: 'XposedOrNot' };
+    }
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+
+    // XposedOrNot trả về Error nếu không tìm thấy
+    if (data.Error) {
+      return { breached: false, breachCount: 0, breaches: [], source: 'XposedOrNot' };
+    }
+
+    // Lấy danh sách breach names
+    const breachList = data.breaches || [];
+    if (breachList.length === 0) {
+      return { breached: false, breachCount: 0, breaches: [], source: 'XposedOrNot' };
+    }
+
+    return {
+      breached: true,
+      breachCount: breachList.length,
+      breaches: breachList.slice(0, 20),
+      source: 'XposedOrNot',
+    };
+  },
+
+  /**
+   * HackCheck API v4 - free breach check with detailed info
+   * CORS enabled, no API key
+   */
+  async _checkHackCheck(email) {
+    const res = await fetch(
+      `https://hackcheck.woventeams.com/api/v4/breachedaccount/${encodeURIComponent(email)}`,
+      { headers: { 'User-Agent': 'SocialShield-Extension' } }
+    );
+
+    if (res.status === 404) {
+      return { breached: false, breachCount: 0, breaches: [], source: 'HackCheck' };
+    }
+
+    if (!res.ok) return null;
+
+    const breaches = await res.json();
+    if (!Array.isArray(breaches) || breaches.length === 0) {
+      return { breached: false, breachCount: 0, breaches: [], source: 'HackCheck' };
+    }
+
+    return {
+      breached: true,
+      breachCount: breaches.length,
+      breaches: breaches.slice(0, 20).map(b => b.Name || b.Title || 'Unknown'),
+      dataClasses: [...new Set(breaches.flatMap(b => b.DataClasses || []))],
+      source: 'HackCheck',
+    };
+  },
+
+  /**
+   * Fallback: kiểm tra domain dựa trên danh sách dịch vụ đã bị breach lớn
+   */
+  _checkDomainHeuristic(email) {
     try {
       const domain = email.split('@')[1]?.toLowerCase();
       if (!domain) return null;
 
-      // Danh sách dịch vụ đã bị breach lớn (public knowledge)
       const knownBreachedDomains = [
         'yahoo.com', 'yahoo.co', 'linkedin.com', 'adobe.com',
         'myspace.com', 'dropbox.com', 'tumblr.com', 'lastfm.com',
+        'canva.com', 'dubsmash.com', 'zynga.com', 'wattpad.com',
       ];
 
-      // Email provider lớn - rất có thể có trong breaches
       const highRiskProviders = [
         'gmail.com', 'hotmail.com', 'outlook.com', 'mail.com',
         'yahoo.com', 'aol.com', 'protonmail.com',
@@ -271,7 +318,8 @@ const SocialShieldScanner = {
           breached: true,
           breachCount: -1,
           breaches: ['Domain has known major breaches'],
-          note: 'Based on known breach database (API key not configured for detailed check)'
+          source: 'heuristic',
+          note: 'Based on known breach database. Check haveibeenpwned.com for details.'
         };
       }
 
@@ -280,13 +328,59 @@ const SocialShieldScanner = {
           breached: null,
           breachCount: -1,
           breaches: [],
+          source: 'heuristic',
           note: 'Common email provider - recommend checking at haveibeenpwned.com'
         };
       }
 
-      return { breached: false, breachCount: 0, breaches: [] };
+      return { breached: false, breachCount: 0, breaches: [], source: 'heuristic' };
     } catch {
       return null;
+    }
+  },
+
+  /**
+   * Kiểm tra password đã bị lộ trong breach database không
+   * Sử dụng HIBP Pwned Passwords API (free, k-anonymity SHA-1)
+   * Chỉ gửi 5 ký tự đầu của SHA-1 hash → privacy-preserving
+   * @param {string} password - password cần kiểm tra
+   * @returns {Object} { pwned: boolean, count: number }
+   */
+  async checkPasswordPwned(password) {
+    if (!password || password.length < 4) return { pwned: false, count: 0 };
+
+    try {
+      // SHA-1 hash password
+      const encoder = new TextEncoder();
+      const data = encoder.encode(password);
+      const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+      const prefix = hashHex.substring(0, 5);
+      const suffix = hashHex.substring(5);
+
+      // k-anonymity: chỉ gửi 5 ký tự đầu
+      const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+        headers: { 'Add-Padding': 'true' }
+      });
+
+      if (!res.ok) return { pwned: false, count: 0 };
+
+      const text = await res.text();
+      const lines = text.split('\n');
+
+      for (const line of lines) {
+        const [hashSuffix, count] = line.trim().split(':');
+        if (hashSuffix === suffix) {
+          return { pwned: true, count: parseInt(count, 10) || 0 };
+        }
+      }
+
+      return { pwned: false, count: 0 };
+    } catch (err) {
+      console.warn('[SocialShield] Pwned password check failed:', err.message);
+      return { pwned: false, count: 0 };
     }
   },
 

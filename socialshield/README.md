@@ -18,7 +18,12 @@ Chrome extension giám sát và bảo vệ tài khoản mạng xã hội khỏi 
   - Hộ chiếu, tài khoản ngân hàng, mẫu thẻ tín dụng
   - API key/token, địa chỉ ví crypto
 - **Phân tích văn bản bằng AI**: Sử dụng OpenAI GPT-4o-mini phát hiện phishing, scam (fallback sang rule-based)
-- **Kiểm tra rò rỉ dữ liệu**: Tích hợp Have I Been Pwned API
+- **Kiểm tra rò rỉ dữ liệu** (multi-source, không cần API key):
+  - XposedOrNot API (primary) → check email trong breach database thật
+  - HackCheck API (fallback) → CORS enabled, chi tiết data classes bị lộ
+  - Domain heuristic (last resort) → danh sách dịch vụ đã bị breach lớn
+  - Hiển thị tên breach, số lượng, nguồn kiểm tra
+- **Kiểm tra password trong breach DB**: HIBP Pwned Passwords API (free, k-anonymity SHA-1) — chỉ gửi 5 ký tự đầu hash, privacy-preserving
 - **Phát hiện mật khẩu lộ**: Cảnh báo nếu plaintext password/PIN xuất hiện trong bio
 - **Gợi ý bảo mật**: Đưa ra lời khuyên dựa trên rủi ro phát hiện được
 
@@ -194,7 +199,8 @@ socialshield/
 
 - Không gửi dữ liệu cho bên thứ ba (trừ OpenAI nếu bật AI analysis)
 - Snapshot lưu local trong Chrome Storage
-- HIBP check chỉ dùng email (không gửi password)
+- Pwned Passwords check dùng k-anonymity (chỉ gửi 5 ký tự đầu SHA-1 hash, không gửi password thật)
+- Email breach check qua XposedOrNot/HackCheck (free, không cần API key)
 - API key do người dùng tự nhập
 - CORS server chỉ cho phép chrome-extension và localhost
 - URL parameters được encode đúng cách (chống injection)
@@ -203,7 +209,7 @@ socialshield/
 
 - **Frontend**: Chrome Extensions Manifest V3, Vanilla JavaScript, CSS
 - **Backend**: Node.js, Express.js, OpenAI API
-- **APIs**: Instagram API v1.1, Twitter/X API v1.1, Have I Been Pwned v3, Google Safe Browsing v4, OpenAI GPT-4o-mini
+- **APIs**: Instagram API v1.1, Twitter/X API v1.1, XposedOrNot, HackCheck, HIBP Pwned Passwords, Google Safe Browsing v4, OpenAI GPT-4o-mini
 
 ## Troubleshooting
 

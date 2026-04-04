@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test -d \"D:/laptrinhweb/extensions\")",
+      "Bash(python -c \":*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(wc -l /d/laptrinhweb/extensions/socialshield/**/*.js /d/laptrinhweb/extensions/socialshield/**/*.html)",
+      "Bash(curl -sL \"https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js\" -o chart.min.js)",
+      "WebFetch(domain:gist.github.com)",
+      "WebSearch",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:medium.com)"
+    ]
+  }
+}

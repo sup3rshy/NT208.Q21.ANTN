@@ -556,13 +556,27 @@
                 email
               });
               if (breachResult && breachResult.breached) {
+                const src = breachResult.source ? ` (via ${breachResult.source})` : '';
+                const breachNames = (breachResult.breaches || []).filter(b => b && !b.startsWith('Domain'));
+                const detail = breachNames.length > 0
+                  ? `Breaches: ${breachNames.slice(0, 10).join(', ')}${breachNames.length > 10 ? ` +${breachNames.length - 10} more` : ''}`
+                  : '';
                 findings.push({
                   type: 'email_breach',
                   severity: 'critical',
                   icon: '💀',
                   title: 'Email Found in Data Breach',
-                  message: `${email} appeared in ${breachResult.breachCount} known data breach(es)`,
+                  message: `${email} appeared in ${breachResult.breachCount > 0 ? breachResult.breachCount : 'multiple'} known data breach(es)${src}${detail ? '. ' + detail : ''}`,
                   values: breachResult.breaches || []
+                });
+              } else if (breachResult && breachResult.note) {
+                findings.push({
+                  type: 'email_breach',
+                  severity: 'medium',
+                  icon: '⚠️',
+                  title: 'Email Breach Status Unknown',
+                  message: `${email}: ${breachResult.note}`,
+                  values: []
                 });
               }
             } catch (err) {
@@ -572,10 +586,36 @@
         }
       }
 
-      // Check password exposure
+      // Check password exposure + Pwned Passwords DB
       const pwdFindings = SocialShieldScanner.checkPasswordExposure(bioText);
       if (pwdFindings.length > 0) {
         findings.push(...pwdFindings);
+        const pwdPatterns = [
+          /(?:password|pass|mật khẩu|mk|pw)[:\s=]+['"]?([^\s'"]{4,30})['"]?/gi,
+          /(?:pin|mã pin)[:\s=]+(\d{4,8})/gi,
+        ];
+        for (const pattern of pwdPatterns) {
+          let m;
+          while ((m = pattern.exec(bioText)) !== null) {
+            try {
+              const pwnedResult = await chrome.runtime.sendMessage({
+                type: 'CHECK_PASSWORD_PWNED',
+                password: m[1]
+              });
+              if (pwnedResult && pwnedResult.pwned) {
+                findings.push({
+                  type: 'password_pwned',
+                  severity: 'critical',
+                  icon: '💀',
+                  title: 'Password Found in Breach Database',
+                  message: `Exposed password appeared in ${pwnedResult.count.toLocaleString()} known data breach(es) (HIBP Pwned Passwords)`,
+                  values: []
+                });
+                break;
+              }
+            } catch {}
+          }
+        }
       }
 
       // Lấy thêm thông tin profile qua API
@@ -612,7 +652,7 @@
 
       // Merge thêm findings từ AI/breach/password vào analysis
       analysis.privacyFindings = [...analysis.privacyFindings, ...findings.filter(f =>
-        ['ai_text_analysis', 'email_breach', 'password_exposed'].includes(f.type)
+        ['ai_text_analysis', 'email_breach', 'password_exposed', 'password_pwned'].includes(f.type)
       )];
 
       // Generate security recommendations
