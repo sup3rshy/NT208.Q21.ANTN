@@ -24,6 +24,27 @@ const SocialShieldStorage = {
     return await chrome.storage.local.get(null);
   },
 
+  // ==================== API Cache (TTL-based) ====================
+
+  /**
+   * Lấy giá trị từ cache, trả về null nếu hết hạn hoặc chưa có
+   * @param {string} cacheKey - key trong storage
+   * @param {number} ttlMs - thời gian sống tính bằng ms
+   */
+  async cacheGet(cacheKey, ttlMs) {
+    const entry = await this.get(cacheKey);
+    if (!entry || !entry._cachedAt) return null;
+    if (Date.now() - entry._cachedAt > ttlMs) return null;
+    return entry.data;
+  },
+
+  /**
+   * Lưu giá trị vào cache với timestamp
+   */
+  async cacheSet(cacheKey, data) {
+    await this.set(cacheKey, { data, _cachedAt: Date.now() });
+  },
+
   // ==================== Snapshots ====================
 
   /**

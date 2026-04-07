@@ -326,18 +326,24 @@
     /**
      * Lấy User ID từ username qua API
      */
+    _igHeaders() {
+      return {
+        'x-csrftoken': this.getCsrfToken(),
+        'x-ig-app-id': '936619743392459',
+        'x-requested-with': 'XMLHttpRequest',
+        'Accept': 'application/json',
+        'Accept-Language': navigator.language || 'en-US',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+      };
+    },
+
     async fetchUserId(username) {
       try {
         const res = await fetch(
           `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
-          {
-            headers: {
-              'x-csrftoken': this.getCsrfToken(),
-              'x-ig-app-id': '936619743392459',
-              'x-requested-with': 'XMLHttpRequest',
-            },
-            credentials: 'include',
-          }
+          { headers: this._igHeaders(), credentials: 'include' }
         );
 
         if (!res.ok) {
@@ -381,8 +387,9 @@
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
-          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
-          await this.wait(4500 + Math.random() * 500);
+          const backoff = Math.min(Math.pow(2, attempt) * 2000, 30000) + Math.random() * 2000;
+          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (waiting ${Math.round(backoff / 1000)}s)`);
+          await this.wait(backoff);
         }
 
         let maxId = null;
@@ -410,11 +417,7 @@
             }
 
             const res = await fetch(url, {
-              headers: {
-                'x-csrftoken': this.getCsrfToken(),
-                'x-ig-app-id': '936619743392459',
-                'x-requested-with': 'XMLHttpRequest',
-              },
+              headers: this._igHeaders(),
               credentials: 'include',
             });
 
@@ -426,6 +429,16 @@
                 hasMore = false;
                 break;
               }
+            }
+
+            // Exponential backoff cho 429 rate limit
+            if (res.status === 429) {
+              const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+              const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
+              this.updateProgress(`Rate limited, waiting ${Math.round(waitMs / 1000)}s...`);
+              console.warn(`[SocialShield] Rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
+              await this.wait(waitMs);
+              continue; // retry same page
             }
 
             if (!res.ok) {
