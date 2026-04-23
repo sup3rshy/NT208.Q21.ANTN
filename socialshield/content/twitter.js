@@ -330,11 +330,6 @@
         'x-csrf-token': this.getCsrfToken(),
         'x-twitter-active-user': 'yes',
         'x-twitter-auth-type': 'OAuth2Session',
-        'Accept': 'application/json',
-        'Accept-Language': navigator.language || 'en-US',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
       };
     },
 
@@ -375,9 +370,8 @@
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
-          const backoff = Math.min(Math.pow(2, attempt) * 2000, 30000) + Math.random() * 2000;
-          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (waiting ${Math.round(backoff / 1000)}s)`);
-          await this.wait(backoff);
+          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
+          await this.wait(3000 + Math.random() * 500);
         }
 
         let cursor = '-1';
@@ -399,20 +393,13 @@
               credentials: 'include',
             });
 
-            // Exponential backoff cho 429 rate limit
-            if (res.status === 429) {
-              const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
-              const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
-              this.updateProgress(`Rate limited, waiting ${Math.round(waitMs / 1000)}s...`);
-              console.warn(`[SocialShield] Twitter rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
-              await this.wait(waitMs);
-              continue; // retry same page
-            }
-
             if (!res.ok) {
               console.error(`[SocialShield] Twitter API error: ${res.status}`);
               if (res.status === 401 || res.status === 403) {
                 this.notify('Authentication error. Make sure you are logged into Twitter/X.', 'error');
+              }
+              if (res.status === 429) {
+                this.notify('Rate limited by Twitter. Please wait a few minutes and try again.', 'warning');
               }
               break;
             }

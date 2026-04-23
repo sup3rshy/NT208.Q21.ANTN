@@ -48,65 +48,33 @@ const InstagramAPI = {
     return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
   },
 
-  // Shared headers cho Instagram API
-  _igHeaders(csrfToken, cookieHeader) {
-    return {
-      'x-csrftoken': csrfToken,
-      'x-ig-app-id': '936619743392459',
-      'x-requested-with': 'XMLHttpRequest',
-      'Accept': 'application/json',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
-      'Cookie': cookieHeader,
-    };
-  },
-
   /**
-   * Lấy raw profile data (shared between fetchUserId and fetchProfileInfo)
-   * Cached 15 phút
-   */
-  async _fetchRawProfile(username) {
-    const cacheKey = `_cache_ig_profile_${username}`;
-    const TTL = 15 * 60 * 1000; // 15 minutes
-
-    // Check cache
-    const cached = await SocialShieldStorage.cacheGet(cacheKey, TTL);
-    if (cached) {
-      console.log(`[SocialShield BG] Cache hit for ${username}`);
-      return cached;
-    }
-
-    const csrfToken = await this.getCsrfToken();
-    const cookieHeader = await this.buildCookieHeader();
-
-    const res = await fetch(
-      `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-      { headers: this._igHeaders(csrfToken, cookieHeader) }
-    );
-
-    if (!res.ok) {
-      console.error(`[SocialShield BG] fetchRawProfile failed: ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const user = data?.data?.user;
-    if (!user) return null;
-
-    // Save to cache
-    await SocialShieldStorage.cacheSet(cacheKey, user);
-    return user;
-  },
-
-  /**
-   * Lấy User ID từ username (cached via _fetchRawProfile)
+   * Lấy User ID từ username
    */
   async fetchUserId(username) {
     try {
-      const user = await this._fetchRawProfile(username);
-      return user?.id || null;
+      const csrfToken = await this.getCsrfToken();
+      const cookieHeader = await this.buildCookieHeader();
+
+      const res = await fetch(
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+        {
+          headers: {
+            'x-csrftoken': csrfToken,
+            'x-ig-app-id': '936619743392459',
+            'x-requested-with': 'XMLHttpRequest',
+            'Cookie': cookieHeader,
+          },
+        }
+      );
+
+      if (!res.ok) {
+        console.error(`[SocialShield BG] fetchUserId failed: ${res.status}`);
+        return null;
+      }
+
+      const data = await res.json();
+      return data?.data?.user?.id || null;
     } catch (err) {
       console.error('[SocialShield BG] fetchUserId error:', err);
       return null;
@@ -114,11 +82,29 @@ const InstagramAPI = {
   },
 
   /**
-   * Lấy profile info (cached via _fetchRawProfile)
+   * Lấy profile info (follower count, following count, etc.)
    */
   async fetchProfileInfo(username) {
     try {
-      const user = await this._fetchRawProfile(username);
+      const csrfToken = await this.getCsrfToken();
+      const cookieHeader = await this.buildCookieHeader();
+
+      const res = await fetch(
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+        {
+          headers: {
+            'x-csrftoken': csrfToken,
+            'x-ig-app-id': '936619743392459',
+            'x-requested-with': 'XMLHttpRequest',
+            'Cookie': cookieHeader,
+          },
+        }
+      );
+
+      if (!res.ok) return null;
+
+      const data = await res.json();
+      const user = data?.data?.user;
       if (!user) return null;
 
       return {
@@ -150,16 +136,12 @@ const InstagramAPI = {
 
     const csrfToken = await this.getCsrfToken();
     const cookieHeader = await this.buildCookieHeader();
-    const headers = this._igHeaders(csrfToken, cookieHeader);
     const isFollowers = type === 'followers';
     const perPage = isFollowers ? 25 : 200;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
-        // Exponential backoff between attempts
-        const backoff = Math.min(Math.pow(2, attempt) * 1000, 30000) + Math.random() * 2000;
-        console.log(`[SocialShield BG] Backoff ${Math.round(backoff)}ms before attempt ${attempt}`);
-        await new Promise(r => setTimeout(r, backoff));
+        await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
       }
 
       let maxId = null;
@@ -169,6 +151,7 @@ const InstagramAPI = {
       while (hasMore) {
         page++;
         try {
+          // Cả followers và following đều dùng cursor-based (next_max_id từ response)
           let url;
           if (isFollowers) {
             url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
@@ -179,7 +162,14 @@ const InstagramAPI = {
             url += `&max_id=${maxId}`;
           }
 
-          const res = await fetch(url, { headers });
+          const res = await fetch(url, {
+            headers: {
+              'x-csrftoken': csrfToken,
+              'x-ig-app-id': '936619743392459',
+              'x-requested-with': 'XMLHttpRequest',
+              'Cookie': cookieHeader,
+            },
+          });
 
           // Phát hiện redirect đến login/challenge page
           if (res.redirected) {
@@ -191,21 +181,12 @@ const InstagramAPI = {
             }
           }
 
-          // Exponential backoff cho 429
-          if (res.status === 429) {
-            const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
-            const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
-            console.warn(`[SocialShield BG] Rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
-            await new Promise(r => setTimeout(r, waitMs));
-            continue; // retry same page
-          }
-
           if (!res.ok) {
             console.error(`[SocialShield BG] API error: ${res.status}`);
-            if (res.status === 401 || res.status === 403) break; // auth error, stop
             break;
           }
 
+          // Kiểm tra response có phải JSON không
           const contentType = res.headers.get('content-type');
           if (!contentType || !contentType.includes('json')) {
             console.error(`[SocialShield BG] Unexpected response type: ${contentType}`);
@@ -217,6 +198,7 @@ const InstagramAPI = {
 
           if (data.users && data.users.length > 0) {
             for (const u of data.users) {
+              // Dedup theo userId (pk) thay vì username
               const key = String(u.pk || u.pk_id || '');
               if (key && !userMap.has(key)) {
                 userMap.set(key, {
@@ -234,6 +216,7 @@ const InstagramAPI = {
             }
           }
 
+          // Cursor-based: dừng khi không còn next_max_id hoặc big_list = false
           if (data.next_max_id && data.big_list !== false) {
             maxId = data.next_max_id;
           } else {
@@ -241,8 +224,7 @@ const InstagramAPI = {
           }
 
           if (hasMore) {
-            // Inter-page delay: 3-5s with random jitter
-            await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
+            await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
           }
         } catch (err) {
           console.error(`[SocialShield BG] fetchConnections page ${page} error:`, err);
@@ -312,26 +294,12 @@ const TwitterAPI = {
       'x-csrf-token': csrfToken,
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
-      'Accept': 'application/json',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
       'Cookie': cookieHeader,
     };
   },
 
   async fetchUserInfo(screenName) {
-    // Cache 15 phút
-    const cacheKey = `_cache_tw_user_${screenName}`;
-    const TTL = 15 * 60 * 1000;
     try {
-      const cached = await SocialShieldStorage.cacheGet(cacheKey, TTL);
-      if (cached) {
-        console.log(`[SocialShield BG] Cache hit for Twitter @${screenName}`);
-        return cached;
-      }
-
       const csrfToken = await this.getCsrfToken();
       const cookieHeader = await this.buildCookieHeader();
 
@@ -345,9 +313,7 @@ const TwitterAPI = {
         return null;
       }
 
-      const data = await res.json();
-      await SocialShieldStorage.cacheSet(cacheKey, data);
-      return data;
+      return await res.json();
     } catch (err) {
       console.error('[SocialShield BG] Twitter fetchUserInfo error:', err);
       return null;
@@ -365,9 +331,7 @@ const TwitterAPI = {
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
-        const backoff = Math.min(Math.pow(2, attempt) * 1000, 30000) + Math.random() * 2000;
-        console.log(`[SocialShield BG] Twitter backoff ${Math.round(backoff)}ms before attempt ${attempt}`);
-        await new Promise(r => setTimeout(r, backoff));
+        await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
       }
 
       let cursor = '-1';
@@ -380,18 +344,8 @@ const TwitterAPI = {
 
           const res = await fetch(url, { headers });
 
-          // Exponential backoff cho 429
-          if (res.status === 429) {
-            const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
-            const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
-            console.warn(`[SocialShield BG] Twitter rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
-            await new Promise(r => setTimeout(r, waitMs));
-            continue; // retry same page
-          }
-
           if (!res.ok) {
             console.error(`[SocialShield BG] Twitter API error: ${res.status}`);
-            if (res.status === 401 || res.status === 403) break;
             break;
           }
 
@@ -427,8 +381,7 @@ const TwitterAPI = {
           cursor = data.next_cursor_str || '0';
 
           if (cursor !== '0') {
-            // Inter-page delay: 2.5-4.5s with random jitter
-            await new Promise(r => setTimeout(r, 2500 + Math.random() * 2000));
+            await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
           }
         } catch (err) {
           console.error(`[SocialShield BG] Twitter fetchConnections page ${page} error:`, err);

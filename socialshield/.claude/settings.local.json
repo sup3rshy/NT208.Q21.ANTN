@@ -12,16 +12,7 @@
       "WebFetch(domain:xposedornot.com)",
       "WebFetch(domain:hackcheck.woventeams.com)",
       "WebFetch(domain:wiki.leakcheck.io)",
-      "WebFetch(domain:haveibeenpwned.com)",
-      "Bash(node -c lib/storage.js)",
-      "Bash(node -c lib/scanner.js)",
-      "Bash(node -c lib/diff.js)",
-      "Bash(node -c lib/text-analyzer.js)",
-      "Bash(node -c background/service-worker.js)",
-      "Bash(node -e \"const m = require\\(''./manifest.json''\\); console.log\\(''Manifest OK:'', m.name, m.version\\); console.log\\(''Permissions:'', m.permissions\\); console.log\\(''Host permissions:'', m.host_permissions.length, ''entries''\\); console.log\\(''Content scripts:'', m.content_scripts.length, ''entries''\\)\")",
-      "WebFetch(domain:scrapfly.io)",
-      "Bash(node -c content/instagram.js)",
-      "Bash(node -c content/twitter.js)"
+      "WebFetch(domain:haveibeenpwned.com)"
     ]
   }
 }
