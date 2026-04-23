@@ -3,11 +3,6 @@
  * Quản lý lưu trữ dữ liệu snapshots, privacy scans, và settings
  * Sử dụng Chrome Storage API (local)
  */
-// Giới hạn số snapshots giữ lại mỗi key (tránh vượt storage.local 10MB).
-// Mỗi snapshot có thể chứa hàng nghìn user → cần cap cứng.
-const SNAPSHOT_RETENTION_LIMIT = 30;
-const PRIVACY_SCAN_RETENTION_LIMIT = 50;
-
 const SocialShieldStorage = {
 
   // ==================== Generic Storage ====================
@@ -27,6 +22,27 @@ const SocialShieldStorage = {
 
   async getAll() {
     return await chrome.storage.local.get(null);
+  },
+
+  // ==================== API Cache (TTL-based) ====================
+
+  /**
+   * Lấy giá trị từ cache, trả về null nếu hết hạn hoặc chưa có
+   * @param {string} cacheKey - key trong storage
+   * @param {number} ttlMs - thời gian sống tính bằng ms
+   */
+  async cacheGet(cacheKey, ttlMs) {
+    const entry = await this.get(cacheKey);
+    if (!entry || !entry._cachedAt) return null;
+    if (Date.now() - entry._cachedAt > ttlMs) return null;
+    return entry.data;
+  },
+
+  /**
+   * Lưu giá trị vào cache với timestamp
+   */
+  async cacheSet(cacheKey, data) {
+    await this.set(cacheKey, { data, _cachedAt: Date.now() });
   },
 
   // ==================== Snapshots ====================
@@ -53,10 +69,6 @@ const SocialShieldStorage = {
     const key = this._snapshotKey(platform, username, type);
     const existing = await this.get(key) || [];
     existing.push(snapshot);
-    // Trim old snapshots → tránh storage overflow (giữ mới nhất N entries)
-    if (existing.length > SNAPSHOT_RETENTION_LIMIT) {
-      existing.splice(0, existing.length - SNAPSHOT_RETENTION_LIMIT);
-    }
     await this.set(key, existing);
 
     // Cập nhật index
@@ -186,9 +198,6 @@ const SocialShieldStorage = {
     const key = `privacy_${platform}_${username}`;
     const existing = await this.get(key) || [];
     existing.push(scan);
-    if (existing.length > PRIVACY_SCAN_RETENTION_LIMIT) {
-      existing.splice(0, existing.length - PRIVACY_SCAN_RETENTION_LIMIT);
-    }
     await this.set(key, existing);
     return scan;
   },
@@ -274,36 +283,6 @@ const SocialShieldStorage = {
       totalAlerts: (all.alerts || []).length,
       unreadAlerts: (all.alerts || []).filter(a => !a.read).length
     };
-  },
-
-  // ==================== Impersonation Whitelist ====================
-
-  /**
-   * Whitelist những username đã được user đánh dấu là "không phải giả mạo".
-   * Key: impersonation_whitelist_{platform}_{targetUsername}
-   */
-  async getImpersonationWhitelist(platform, targetUsername) {
-    const key = `impersonation_whitelist_${platform}_${targetUsername}`;
-    return await this.get(key) || [];
-  },
-
-  async addToImpersonationWhitelist(platform, targetUsername, suspectUsername) {
-    const key = `impersonation_whitelist_${platform}_${targetUsername}`;
-    const list = await this.get(key) || [];
-    const lower = String(suspectUsername).toLowerCase();
-    if (!list.includes(lower)) {
-      list.push(lower);
-      await this.set(key, list);
-    }
-    return list;
-  },
-
-  async removeFromImpersonationWhitelist(platform, targetUsername, suspectUsername) {
-    const key = `impersonation_whitelist_${platform}_${targetUsername}`;
-    const list = await this.get(key) || [];
-    const filtered = list.filter(u => u !== String(suspectUsername).toLowerCase());
-    await this.set(key, filtered);
-    return filtered;
   },
 
   // ==================== Private Helpers ====================

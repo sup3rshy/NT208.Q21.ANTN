@@ -48,33 +48,65 @@ const InstagramAPI = {
     return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
   },
 
+  // Shared headers cho Instagram API
+  _igHeaders(csrfToken, cookieHeader) {
+    return {
+      'x-csrftoken': csrfToken,
+      'x-ig-app-id': '936619743392459',
+      'x-requested-with': 'XMLHttpRequest',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
+      'Cookie': cookieHeader,
+    };
+  },
+
   /**
-   * Lấy User ID từ username
+   * Lấy raw profile data (shared between fetchUserId and fetchProfileInfo)
+   * Cached 15 phút
+   */
+  async _fetchRawProfile(username) {
+    const cacheKey = `_cache_ig_profile_${username}`;
+    const TTL = 15 * 60 * 1000; // 15 minutes
+
+    // Check cache
+    const cached = await SocialShieldStorage.cacheGet(cacheKey, TTL);
+    if (cached) {
+      console.log(`[SocialShield BG] Cache hit for ${username}`);
+      return cached;
+    }
+
+    const csrfToken = await this.getCsrfToken();
+    const cookieHeader = await this.buildCookieHeader();
+
+    const res = await fetch(
+      `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+      { headers: this._igHeaders(csrfToken, cookieHeader) }
+    );
+
+    if (!res.ok) {
+      console.error(`[SocialShield BG] fetchRawProfile failed: ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const user = data?.data?.user;
+    if (!user) return null;
+
+    // Save to cache
+    await SocialShieldStorage.cacheSet(cacheKey, user);
+    return user;
+  },
+
+  /**
+   * Lấy User ID từ username (cached via _fetchRawProfile)
    */
   async fetchUserId(username) {
     try {
-      const csrfToken = await this.getCsrfToken();
-      const cookieHeader = await this.buildCookieHeader();
-
-      const res = await fetch(
-        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-        {
-          headers: {
-            'x-csrftoken': csrfToken,
-            'x-ig-app-id': '936619743392459',
-            'x-requested-with': 'XMLHttpRequest',
-            'Cookie': cookieHeader,
-          },
-        }
-      );
-
-      if (!res.ok) {
-        console.error(`[SocialShield BG] fetchUserId failed: ${res.status}`);
-        return null;
-      }
-
-      const data = await res.json();
-      return data?.data?.user?.id || null;
+      const user = await this._fetchRawProfile(username);
+      return user?.id || null;
     } catch (err) {
       console.error('[SocialShield BG] fetchUserId error:', err);
       return null;
@@ -82,29 +114,11 @@ const InstagramAPI = {
   },
 
   /**
-   * Lấy profile info (follower count, following count, etc.)
+   * Lấy profile info (cached via _fetchRawProfile)
    */
   async fetchProfileInfo(username) {
     try {
-      const csrfToken = await this.getCsrfToken();
-      const cookieHeader = await this.buildCookieHeader();
-
-      const res = await fetch(
-        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-        {
-          headers: {
-            'x-csrftoken': csrfToken,
-            'x-ig-app-id': '936619743392459',
-            'x-requested-with': 'XMLHttpRequest',
-            'Cookie': cookieHeader,
-          },
-        }
-      );
-
-      if (!res.ok) return null;
-
-      const data = await res.json();
-      const user = data?.data?.user;
+      const user = await this._fetchRawProfile(username);
       if (!user) return null;
 
       return {
@@ -136,12 +150,16 @@ const InstagramAPI = {
 
     const csrfToken = await this.getCsrfToken();
     const cookieHeader = await this.buildCookieHeader();
+    const headers = this._igHeaders(csrfToken, cookieHeader);
     const isFollowers = type === 'followers';
     const perPage = isFollowers ? 25 : 200;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
-        await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
+        // Exponential backoff between attempts
+        const backoff = Math.min(Math.pow(2, attempt) * 1000, 30000) + Math.random() * 2000;
+        console.log(`[SocialShield BG] Backoff ${Math.round(backoff)}ms before attempt ${attempt}`);
+        await new Promise(r => setTimeout(r, backoff));
       }
 
       let maxId = null;
@@ -151,7 +169,6 @@ const InstagramAPI = {
       while (hasMore) {
         page++;
         try {
-          // Cả followers và following đều dùng cursor-based (next_max_id từ response)
           let url;
           if (isFollowers) {
             url = `https://www.instagram.com/api/v1/friendships/${userId}/followers/?count=${perPage}&search_surface=follow_list_page`;
@@ -162,14 +179,7 @@ const InstagramAPI = {
             url += `&max_id=${maxId}`;
           }
 
-          const res = await fetch(url, {
-            headers: {
-              'x-csrftoken': csrfToken,
-              'x-ig-app-id': '936619743392459',
-              'x-requested-with': 'XMLHttpRequest',
-              'Cookie': cookieHeader,
-            },
-          });
+          const res = await fetch(url, { headers });
 
           // Phát hiện redirect đến login/challenge page
           if (res.redirected) {
@@ -181,12 +191,21 @@ const InstagramAPI = {
             }
           }
 
+          // Exponential backoff cho 429
+          if (res.status === 429) {
+            const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+            const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
+            console.warn(`[SocialShield BG] Rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
+            await new Promise(r => setTimeout(r, waitMs));
+            continue; // retry same page
+          }
+
           if (!res.ok) {
             console.error(`[SocialShield BG] API error: ${res.status}`);
+            if (res.status === 401 || res.status === 403) break; // auth error, stop
             break;
           }
 
-          // Kiểm tra response có phải JSON không
           const contentType = res.headers.get('content-type');
           if (!contentType || !contentType.includes('json')) {
             console.error(`[SocialShield BG] Unexpected response type: ${contentType}`);
@@ -198,7 +217,6 @@ const InstagramAPI = {
 
           if (data.users && data.users.length > 0) {
             for (const u of data.users) {
-              // Dedup theo userId (pk) thay vì username
               const key = String(u.pk || u.pk_id || '');
               if (key && !userMap.has(key)) {
                 userMap.set(key, {
@@ -216,7 +234,6 @@ const InstagramAPI = {
             }
           }
 
-          // Cursor-based: dừng khi không còn next_max_id hoặc big_list = false
           if (data.next_max_id && data.big_list !== false) {
             maxId = data.next_max_id;
           } else {
@@ -224,7 +241,8 @@ const InstagramAPI = {
           }
 
           if (hasMore) {
-            await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
+            // Inter-page delay: 3-5s with random jitter
+            await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
           }
         } catch (err) {
           console.error(`[SocialShield BG] fetchConnections page ${page} error:`, err);
@@ -247,20 +265,7 @@ const InstagramAPI = {
 
 // ==================== Twitter/X API (Background) ====================
 
-// Twitter/X sử dụng bearer token public embed trong web app JS.
-// Token có thể thay đổi → cho phép user override qua settings.
-// Fallback là token đã biết (sẽ thử dùng cho tới khi Twitter rotate).
-const TWITTER_BEARER_FALLBACK = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
-
-async function getTwitterBearer() {
-  try {
-    const { settings } = await chrome.storage.local.get('settings');
-    if (settings?.twitterBearerToken && settings.twitterBearerToken.length > 40) {
-      return settings.twitterBearerToken;
-    }
-  } catch {}
-  return TWITTER_BEARER_FALLBACK;
-}
+const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
 const TwitterAPI = {
   async getCookies() {
@@ -287,25 +292,38 @@ const TwitterAPI = {
     return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
   },
 
-  async getHeaders(csrfToken, cookieHeader) {
-    const bearer = await getTwitterBearer();
+  getHeaders(csrfToken, cookieHeader) {
     return {
-      'authorization': `Bearer ${bearer}`,
+      'authorization': `Bearer ${TWITTER_BEARER}`,
       'x-csrf-token': csrfToken,
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
       'Cookie': cookieHeader,
     };
   },
 
   async fetchUserInfo(screenName) {
+    // Cache 15 phút
+    const cacheKey = `_cache_tw_user_${screenName}`;
+    const TTL = 15 * 60 * 1000;
     try {
+      const cached = await SocialShieldStorage.cacheGet(cacheKey, TTL);
+      if (cached) {
+        console.log(`[SocialShield BG] Cache hit for Twitter @${screenName}`);
+        return cached;
+      }
+
       const csrfToken = await this.getCsrfToken();
       const cookieHeader = await this.buildCookieHeader();
 
       const res = await fetch(
         `https://x.com/i/api/1.1/users/show.json?screen_name=${encodeURIComponent(screenName)}`,
-        { headers: await this.getHeaders(csrfToken, cookieHeader) }
+        { headers: this.getHeaders(csrfToken, cookieHeader) }
       );
 
       if (!res.ok) {
@@ -313,7 +331,9 @@ const TwitterAPI = {
         return null;
       }
 
-      return await res.json();
+      const data = await res.json();
+      await SocialShieldStorage.cacheSet(cacheKey, data);
+      return data;
     } catch (err) {
       console.error('[SocialShield BG] Twitter fetchUserInfo error:', err);
       return null;
@@ -327,11 +347,13 @@ const TwitterAPI = {
 
     const csrfToken = await this.getCsrfToken();
     const cookieHeader = await this.buildCookieHeader();
-    const headers = await this.getHeaders(csrfToken, cookieHeader);
+    const headers = this.getHeaders(csrfToken, cookieHeader);
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
-        await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
+        const backoff = Math.min(Math.pow(2, attempt) * 1000, 30000) + Math.random() * 2000;
+        console.log(`[SocialShield BG] Twitter backoff ${Math.round(backoff)}ms before attempt ${attempt}`);
+        await new Promise(r => setTimeout(r, backoff));
       }
 
       let cursor = '-1';
@@ -344,8 +366,18 @@ const TwitterAPI = {
 
           const res = await fetch(url, { headers });
 
+          // Exponential backoff cho 429
+          if (res.status === 429) {
+            const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+            const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
+            console.warn(`[SocialShield BG] Twitter rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
+            await new Promise(r => setTimeout(r, waitMs));
+            continue; // retry same page
+          }
+
           if (!res.ok) {
             console.error(`[SocialShield BG] Twitter API error: ${res.status}`);
+            if (res.status === 401 || res.status === 403) break;
             break;
           }
 
@@ -381,7 +413,8 @@ const TwitterAPI = {
           cursor = data.next_cursor_str || '0';
 
           if (cursor !== '0') {
-            await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
+            // Inter-page delay: 2.5-4.5s with random jitter
+            await new Promise(r => setTimeout(r, 2500 + Math.random() * 2000));
           }
         } catch (err) {
           console.error(`[SocialShield BG] Twitter fetchConnections page ${page} error:`, err);
@@ -401,24 +434,7 @@ const TwitterAPI = {
 
 // ==================== Auto Capture ====================
 
-// Mutex: tránh 2 auto-capture chạy song song (alarm + manual trigger)
-// gây race condition khi đọc/ghi snapshot array.
-let autoCaptureRunning = false;
-
 async function runAutoCapture() {
-  if (autoCaptureRunning) {
-    console.log('[SocialShield] Auto-capture already running, skipping duplicate trigger');
-    return;
-  }
-  autoCaptureRunning = true;
-  try {
-    await _runAutoCaptureImpl();
-  } finally {
-    autoCaptureRunning = false;
-  }
-}
-
-async function _runAutoCaptureImpl() {
   console.log('[SocialShield] Auto-capture triggered');
 
   // Kiểm tra login status cho cả hai nền tảng
@@ -524,11 +540,6 @@ async function saveAutoCaptureSnapshot(profile, type, users, settings) {
   const storageKey = `snapshots_${profile.platform}_${profile.username}_${type}`;
   const existing = (await chrome.storage.local.get(storageKey))[storageKey] || [];
   existing.push(snapshot);
-  // Cap retention để tránh storage.local overflow (đồng bộ với SocialShieldStorage)
-  const SNAPSHOT_LIMIT = 30;
-  if (existing.length > SNAPSHOT_LIMIT) {
-    existing.splice(0, existing.length - SNAPSHOT_LIMIT);
-  }
   await chrome.storage.local.set({ [storageKey]: existing });
 
   // Cập nhật snapshot_index để dashboard thấy snapshot mới
@@ -615,83 +626,6 @@ function computeDiff(oldSnap, newSnap) {
   }
 
   return { addedCount, removedCount };
-}
-
-// ==================== HIBP Cache + Rate-limit Guard ====================
-
-// Cache breach results để giảm tải HIBP API (free tier ~1600 req/day/IP).
-// TTL = 24h là hợp lý — breach data ít thay đổi trong ngày.
-const HIBP_CACHE_TTL = 24 * 60 * 60 * 1000;
-const HIBP_CACHE_KEY = 'hibp_cache';
-// Nếu gặp 429 hoặc 503, tạm dừng gọi HIBP trong cooldown này.
-let hibpCooldownUntil = 0;
-
-async function checkEmailBreachCached(email) {
-  if (!email || typeof email !== 'string') return null;
-  const emailLower = email.toLowerCase().trim();
-
-  // Check cache trước
-  try {
-    const { [HIBP_CACHE_KEY]: cache = {} } = await chrome.storage.local.get(HIBP_CACHE_KEY);
-    const entry = cache[emailLower];
-    if (entry && (Date.now() - entry.at) < HIBP_CACHE_TTL) {
-      return entry.result;
-    }
-  } catch {}
-
-  // Nếu đang trong cooldown → trả null thay vì spam API
-  if (Date.now() < hibpCooldownUntil) {
-    console.warn('[SocialShield] HIBP in cooldown, skipping request');
-    return null;
-  }
-
-  try {
-    const res = await fetch(
-      `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(emailLower)}?truncateResponse=true`,
-      { headers: { 'User-Agent': 'SocialShield-Extension' } }
-    );
-
-    let result;
-    if (res.status === 404) {
-      result = { breached: false, breachCount: 0, breaches: [] };
-    } else if (res.status === 429 || res.status === 503) {
-      // Rate-limited: set cooldown 10 phút, không cache kết quả
-      hibpCooldownUntil = Date.now() + 10 * 60 * 1000;
-      console.warn(`[SocialShield] HIBP ${res.status}, cooldown 10min`);
-      return null;
-    } else if (res.status === 401) {
-      // HIBP API v3 yêu cầu API key cho free tier mới
-      // → bỏ qua để không spam, cache kết quả "unknown"
-      return null;
-    } else if (res.ok) {
-      const breaches = await res.json();
-      result = {
-        breached: true,
-        breachCount: breaches.length,
-        breaches: breaches.map(b => b.Name),
-      };
-    } else {
-      return null;
-    }
-
-    // Cache kết quả hợp lệ
-    try {
-      const { [HIBP_CACHE_KEY]: cache = {} } = await chrome.storage.local.get(HIBP_CACHE_KEY);
-      cache[emailLower] = { result, at: Date.now() };
-      // Prune cache nếu > 500 entries
-      const keys = Object.keys(cache);
-      if (keys.length > 500) {
-        keys.sort((a, b) => cache[a].at - cache[b].at);
-        for (const k of keys.slice(0, keys.length - 500)) delete cache[k];
-      }
-      await chrome.storage.local.set({ [HIBP_CACHE_KEY]: cache });
-    } catch {}
-
-    return result;
-  } catch (err) {
-    console.error('[SocialShield] HIBP fetch error:', err);
-    return null;
-  }
 }
 
 // ==================== Installation ====================
@@ -822,12 +756,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'CHECK_EMAIL_BREACH':
-<<<<<<< HEAD
-      checkEmailBreachCached(message.email).then(sendResponse).catch(err => {
-        console.error('[SocialShield] CHECK_EMAIL_BREACH error:', err);
-        sendResponse(null);
-      });
-=======
       (async () => {
         const email = message.email;
         if (!email) { sendResponse(null); return; }
@@ -878,7 +806,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse(null);
         }
       })();
->>>>>>> d6f5f0ab59aa14349ffdad2c44e04789f52f3097
       return true;
 
     case 'CHECK_PASSWORD_PWNED':

@@ -54,19 +54,16 @@
         padding: 16px 20px; max-width: 320px; font-family: -apple-system, sans-serif;
         box-shadow: 0 8px 32px rgba(0,0,0,0.4);
       `;
-      const title = document.createElement('div');
-      title.style.cssText = 'color: #ef4444; font-weight: 600; margin-bottom: 8px;';
-      title.textContent = 'SocialShield - Extension Reloaded';
-      const desc = document.createElement('div');
-      desc.style.cssText = 'color: #ccc; font-size: 13px; margin-bottom: 12px;';
-      desc.textContent = 'Extension was updated/reloaded. Please refresh this page to reconnect.';
-      const btn = document.createElement('button');
-      btn.style.cssText = 'background: #ef4444; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;';
-      btn.textContent = 'Refresh Page';
-      btn.addEventListener('click', () => location.reload());
-      notice.appendChild(title);
-      notice.appendChild(desc);
-      notice.appendChild(btn);
+      notice.innerHTML = `
+        <div style="color: #ef4444; font-weight: 600; margin-bottom: 8px;">SocialShield - Extension Reloaded</div>
+        <div style="color: #ccc; font-size: 13px; margin-bottom: 12px;">
+          Extension was updated/reloaded. Please refresh this page to reconnect.
+        </div>
+        <button style="
+          background: #ef4444; color: white; border: none; border-radius: 6px;
+          padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
+        " onclick="location.reload()">Refresh Page</button>
+      `;
       document.body.appendChild(notice);
     },
 
@@ -329,18 +326,24 @@
     /**
      * Lấy User ID từ username qua API
      */
+    _igHeaders() {
+      return {
+        'x-csrftoken': this.getCsrfToken(),
+        'x-ig-app-id': '936619743392459',
+        'x-requested-with': 'XMLHttpRequest',
+        'Accept': 'application/json',
+        'Accept-Language': navigator.language || 'en-US',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+      };
+    },
+
     async fetchUserId(username) {
       try {
         const res = await fetch(
           `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
-          {
-            headers: {
-              'x-csrftoken': this.getCsrfToken(),
-              'x-ig-app-id': '936619743392459',
-              'x-requested-with': 'XMLHttpRequest',
-            },
-            credentials: 'include',
-          }
+          { headers: this._igHeaders(), credentials: 'include' }
         );
 
         if (!res.ok) {
@@ -384,8 +387,9 @@
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
-          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
-          await this.wait(4500 + Math.random() * 500);
+          const backoff = Math.min(Math.pow(2, attempt) * 2000, 30000) + Math.random() * 2000;
+          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (waiting ${Math.round(backoff / 1000)}s)`);
+          await this.wait(backoff);
         }
 
         let maxId = null;
@@ -413,11 +417,7 @@
             }
 
             const res = await fetch(url, {
-              headers: {
-                'x-csrftoken': this.getCsrfToken(),
-                'x-ig-app-id': '936619743392459',
-                'x-requested-with': 'XMLHttpRequest',
-              },
+              headers: this._igHeaders(),
               credentials: 'include',
             });
 
@@ -429,6 +429,16 @@
                 hasMore = false;
                 break;
               }
+            }
+
+            // Exponential backoff cho 429 rate limit
+            if (res.status === 429) {
+              const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+              const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
+              this.updateProgress(`Rate limited, waiting ${Math.round(waitMs / 1000)}s...`);
+              console.warn(`[SocialShield] Rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
+              await this.wait(waitMs);
+              continue; // retry same page
             }
 
             if (!res.ok) {
@@ -810,8 +820,7 @@
           return;
         }
 
-        const whitelist = await SocialShieldStorage.getImpersonationWhitelist('instagram', profile);
-        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers, whitelist);
+        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers);
 
         if (suspects.length === 0) {
           this.notify(`No impersonation accounts found among ${allUsers.length} users.`, 'success');
@@ -919,17 +928,14 @@
         const result = SocialShieldTextAnalyzer.analyzeTextRuleBased(text);
         if (result.classification === 'safe') return;
 
-        // Overlay warning badge (DOM API, no innerHTML)
+        // Overlay warning badge
         el.style.position = 'relative';
         const badge = document.createElement('div');
         badge.className = 'ss-scam-badge';
-        badge.title = result.reasoning || '';
-        const icon = document.createTextNode(result.classification === 'scam' ? '🚨 ' : '⚠️ ');
-        const label = document.createElement('span');
-        label.textContent = result.classification === 'scam' ? 'Scam' : 'Suspicious';
-        label.style.cssText = 'font-size: 10px;';
-        badge.appendChild(icon);
-        badge.appendChild(label);
+        badge.title = result.reasoning;
+        badge.innerHTML = result.classification === 'scam'
+          ? '🚨 <span>Scam</span>'
+          : '⚠️ <span>Suspicious</span>';
         badge.style.cssText = `
           position: absolute; top: -2px; right: -2px; z-index: 9999;
           background: ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'};
@@ -938,6 +944,7 @@
           font-family: -apple-system, sans-serif; line-height: 1.2;
           box-shadow: 0 2px 6px rgba(0,0,0,0.3);
         `;
+        badge.querySelector('span').style.cssText = 'font-size: 10px;';
         el.style.outline = `1px solid ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'}`;
         el.style.outlineOffset = '2px';
         el.style.borderRadius = '4px';
@@ -945,56 +952,30 @@
       };
 
       const scanAllComments = () => {
-        if (!this.isContextValid()) { this.teardownObservers(); return; }
+        // Instagram comments sử dụng nhiều selectors
         const commentSelectors = [
-          'ul li span[dir]',
-          '[class*="Comment"] span',
-          'div[role="button"] + span',
+          'ul li span[dir]',                        // Comment text
+          '[class*="Comment"] span',                 // Comment spans
+          'div[role="button"] + span',               // Reply text
         ];
         for (const sel of commentSelectors) {
           document.querySelectorAll(sel).forEach(el => {
-            if (el.closest('.ss-scam-badge')) return;
+            if (el.closest('.ss-scam-badge')) return; // skip badge elements
             if (el.innerText && el.innerText.length > 15) scanComment(el);
           });
         }
       };
 
-      // Cancel old observer nếu có (defensive cho SPA re-init)
-      if (this.commentObserver) {
-        try { this.commentObserver.disconnect(); } catch {}
-      }
-
+      // Scan khi page load
       setTimeout(scanAllComments, 3000);
 
-      // Observe scoped area (main > article/section) thay vì toàn body.
-      // Fallback sang body nếu chưa có main element.
+      // Observe DOM changes cho comments mới (debounced)
       let debounceTimer = null;
-      const observer = new MutationObserver((mutations) => {
-        if (!this.isContextValid()) { this.teardownObservers(); return; }
-        // Chỉ trigger nếu có node thực sự được thêm vào (skip style/attribute mutations)
-        const hasAddedNodes = mutations.some(m => m.addedNodes && m.addedNodes.length > 0);
-        if (!hasAddedNodes) return;
+      const observer = new MutationObserver(() => {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(scanAllComments, 1500);
+        debounceTimer = setTimeout(scanAllComments, 500);
       });
-      const target = document.querySelector('main') || document.body;
-      observer.observe(target, { childList: true, subtree: true });
-      this.commentObserver = observer;
-    },
-
-    /**
-     * Disconnect tất cả MutationObservers - gọi khi context invalidated
-     * hoặc re-init để tránh memory leak.
-     */
-    teardownObservers() {
-      if (this.commentObserver) {
-        try { this.commentObserver.disconnect(); } catch {}
-        this.commentObserver = null;
-      }
-      if (this.urlObserver) {
-        try { this.urlObserver.disconnect(); } catch {}
-        this.urlObserver = null;
-      }
+      observer.observe(document.body, { childList: true, subtree: true });
     },
 
     // ==================== URL Observer ====================
@@ -1012,21 +993,14 @@
     },
 
     observeUrlChanges() {
-      if (this.urlObserver) {
-        try { this.urlObserver.disconnect(); } catch {}
-      }
       let lastUrl = location.href;
       const observer = new MutationObserver(() => {
-        if (!this.isContextValid()) { this.teardownObservers(); return; }
         if (location.href !== lastUrl) {
           lastUrl = location.href;
           this.onUrlChange();
         }
       });
       observer.observe(document.body, { childList: true, subtree: true });
-      this.urlObserver = observer;
-      // Cleanup khi page unload
-      window.addEventListener('pagehide', () => this.teardownObservers(), { once: true });
     },
 
     onUrlChange() {

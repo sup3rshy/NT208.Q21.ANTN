@@ -12,18 +12,8 @@
   if (window.__socialshield_twitter_loaded) return;
   window.__socialshield_twitter_loaded = true;
 
-  // Twitter public bearer token: embed trong web app JS của Twitter (không phải secret).
-  // User có thể override qua Dashboard → Settings nếu Twitter rotate token.
-  const TWITTER_BEARER_FALLBACK = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
-  let TWITTER_BEARER = TWITTER_BEARER_FALLBACK;
-  // Load override (nếu có) từ settings, async
-  try {
-    chrome.storage.local.get('settings').then(({ settings }) => {
-      if (settings?.twitterBearerToken && settings.twitterBearerToken.length > 40) {
-        TWITTER_BEARER = settings.twitterBearerToken;
-      }
-    });
-  } catch {}
+  // Twitter public bearer token (embedded in Twitter's web app JS, not secret)
+  const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
   const SS_Twitter = {
     isCapturing: false,
@@ -57,19 +47,16 @@
         padding: 16px 20px; max-width: 320px; font-family: -apple-system, sans-serif;
         box-shadow: 0 8px 32px rgba(0,0,0,0.4);
       `;
-      const title = document.createElement('div');
-      title.style.cssText = 'color: #ef4444; font-weight: 600; margin-bottom: 8px;';
-      title.textContent = 'SocialShield - Extension Reloaded';
-      const desc = document.createElement('div');
-      desc.style.cssText = 'color: #ccc; font-size: 13px; margin-bottom: 12px;';
-      desc.textContent = 'Extension was updated/reloaded. Please refresh this page to reconnect.';
-      const btn = document.createElement('button');
-      btn.style.cssText = 'background: #ef4444; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;';
-      btn.textContent = 'Refresh Page';
-      btn.addEventListener('click', () => location.reload());
-      notice.appendChild(title);
-      notice.appendChild(desc);
-      notice.appendChild(btn);
+      notice.innerHTML = `
+        <div style="color: #ef4444; font-weight: 600; margin-bottom: 8px;">SocialShield - Extension Reloaded</div>
+        <div style="color: #ccc; font-size: 13px; margin-bottom: 12px;">
+          Extension was updated/reloaded. Please refresh this page to reconnect.
+        </div>
+        <button style="
+          background: #ef4444; color: white; border: none; border-radius: 6px;
+          padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
+        " onclick="location.reload()">Refresh Page</button>
+      `;
       document.body.appendChild(notice);
     },
 
@@ -330,6 +317,11 @@
         'x-csrf-token': this.getCsrfToken(),
         'x-twitter-active-user': 'yes',
         'x-twitter-auth-type': 'OAuth2Session',
+        'Accept': 'application/json',
+        'Accept-Language': navigator.language || 'en-US',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
       };
     },
 
@@ -370,8 +362,9 @@
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
-          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
-          await this.wait(3000 + Math.random() * 500);
+          const backoff = Math.min(Math.pow(2, attempt) * 2000, 30000) + Math.random() * 2000;
+          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (waiting ${Math.round(backoff / 1000)}s)`);
+          await this.wait(backoff);
         }
 
         let cursor = '-1';
@@ -393,13 +386,20 @@
               credentials: 'include',
             });
 
+            // Exponential backoff cho 429 rate limit
+            if (res.status === 429) {
+              const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+              const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
+              this.updateProgress(`Rate limited, waiting ${Math.round(waitMs / 1000)}s...`);
+              console.warn(`[SocialShield] Twitter rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
+              await this.wait(waitMs);
+              continue; // retry same page
+            }
+
             if (!res.ok) {
               console.error(`[SocialShield] Twitter API error: ${res.status}`);
               if (res.status === 401 || res.status === 403) {
                 this.notify('Authentication error. Make sure you are logged into Twitter/X.', 'error');
-              }
-              if (res.status === 429) {
-                this.notify('Rate limited by Twitter. Please wait a few minutes and try again.', 'warning');
               }
               break;
             }
@@ -753,8 +753,7 @@
           return;
         }
 
-        const whitelist = await SocialShieldStorage.getImpersonationWhitelist('twitter', profile);
-        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers, whitelist);
+        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers);
 
         if (suspects.length === 0) {
           this.notify(`No impersonation accounts found among ${allUsers.length} users.`, 'success');
@@ -855,19 +854,17 @@
         const result = SocialShieldTextAnalyzer.analyzeTextRuleBased(text);
         if (result.classification === 'safe') return;
 
+        // Overlay warning
         const tweetArticle = el.closest('article') || el.closest('[data-testid="tweet"]') || el;
         if (tweetArticle.querySelector('.ss-scam-badge')) return;
 
         tweetArticle.style.position = 'relative';
         const badge = document.createElement('div');
         badge.className = 'ss-scam-badge';
-        badge.title = result.reasoning || '';
-        const icon = document.createTextNode(result.classification === 'scam' ? '🚨 ' : '⚠️ ');
-        const label = document.createElement('span');
-        label.textContent = result.classification === 'scam' ? 'Scam' : 'Suspicious';
-        label.style.cssText = 'font-size: 10px;';
-        badge.appendChild(icon);
-        badge.appendChild(label);
+        badge.title = result.reasoning;
+        badge.innerHTML = result.classification === 'scam'
+          ? '🚨 <span>Scam</span>'
+          : '⚠️ <span>Suspicious</span>';
         badge.style.cssText = `
           position: absolute; top: 4px; right: 4px; z-index: 9999;
           background: ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'};
@@ -876,6 +873,7 @@
           font-family: -apple-system, sans-serif; line-height: 1.2;
           box-shadow: 0 2px 6px rgba(0,0,0,0.3);
         `;
+        badge.querySelector('span').style.cssText = 'font-size: 10px;';
         tweetArticle.style.outline = `1px solid ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'}`;
         tweetArticle.style.outlineOffset = '1px';
         tweetArticle.style.borderRadius = '12px';
@@ -883,36 +881,18 @@
       };
 
       const scanAllTweets = () => {
-        if (!this.isContextValid()) { this.teardownObservers(); return; }
+        // Twitter uses data-testid="tweetText" for tweet content
         document.querySelectorAll('[data-testid="tweetText"]').forEach(el => scanTweet(el));
       };
-
-      if (this.commentObserver) { try { this.commentObserver.disconnect(); } catch {} }
 
       setTimeout(scanAllTweets, 3000);
 
       let debounceTimer = null;
-      const observer = new MutationObserver((mutations) => {
-        if (!this.isContextValid()) { this.teardownObservers(); return; }
-        const hasAddedNodes = mutations.some(m => m.addedNodes && m.addedNodes.length > 0);
-        if (!hasAddedNodes) return;
+      const observer = new MutationObserver(() => {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(scanAllTweets, 1500);
+        debounceTimer = setTimeout(scanAllTweets, 500);
       });
-      const target = document.querySelector('main') || document.body;
-      observer.observe(target, { childList: true, subtree: true });
-      this.commentObserver = observer;
-    },
-
-    teardownObservers() {
-      if (this.commentObserver) {
-        try { this.commentObserver.disconnect(); } catch {}
-        this.commentObserver = null;
-      }
-      if (this.urlObserver) {
-        try { this.urlObserver.disconnect(); } catch {}
-        this.urlObserver = null;
-      }
+      observer.observe(document.body, { childList: true, subtree: true });
     },
 
     // ==================== URL Observer ====================
@@ -931,18 +911,14 @@
     },
 
     observeUrlChanges() {
-      if (this.urlObserver) { try { this.urlObserver.disconnect(); } catch {} }
       let lastUrl = location.href;
       const observer = new MutationObserver(() => {
-        if (!this.isContextValid()) { this.teardownObservers(); return; }
         if (location.href !== lastUrl) {
           lastUrl = location.href;
           this.onUrlChange();
         }
       });
       observer.observe(document.body, { childList: true, subtree: true });
-      this.urlObserver = observer;
-      window.addEventListener('pagehide', () => this.teardownObservers(), { once: true });
     },
 
     onUrlChange() {

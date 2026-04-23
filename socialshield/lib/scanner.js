@@ -13,9 +13,6 @@ const SocialShieldScanner = {
    */
   scanPrivacy(text) {
     if (!text) return [];
-    // Giới hạn input để tránh regex ReDoS trên bio cực dài.
-    // Bio thực tế chỉ 150 char; cắt ở 5000 char vẫn đủ context cho mọi platform.
-    if (text.length > 5000) text = text.substring(0, 5000);
     const findings = [];
 
     // Email addresses
@@ -44,9 +41,8 @@ const SocialShieldScanner = {
       });
     }
 
-    // International phone numbers.
-    // Anchor word-boundary để tránh backtracking trên chuỗi dài chứa nhiều dấu phân tách.
-    const intlPhones = text.match(/(?:^|\s)(\+\d{1,3}[ .-]?\d{1,4}[ .-]?\d{3,4}[ .-]?\d{3,4})(?=\s|$|[^\d])/g);
+    // International phone numbers
+    const intlPhones = text.match(/\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/g);
     if (intlPhones) {
       const unique = [...new Set(intlPhones)].filter(p => {
         return !vnPhones || !vnPhones.some(vp => p.includes(vp));
@@ -913,18 +909,15 @@ const SocialShieldScanner = {
    * @param {Array} users - danh sách users cần kiểm tra
    * @returns {Array} danh sách tài khoản nghi giả mạo
    */
-  detectImpersonation(targetUsername, targetDisplayName, users, whitelist = []) {
+  detectImpersonation(targetUsername, targetDisplayName, users) {
     if (!targetUsername || !users || users.length === 0) return [];
 
     const suspects = [];
     const targetLower = targetUsername.toLowerCase();
     const targetNameLower = (targetDisplayName || '').toLowerCase();
-    // Whitelist: user đã đánh dấu các username này là hợp lệ (false positive)
-    const whitelistSet = new Set((whitelist || []).map(u => String(u).toLowerCase()));
 
     for (const user of users) {
       const uname = (user.username || '').toLowerCase();
-      if (whitelistSet.has(uname)) continue;
       const dname = (user.displayName || '').toLowerCase();
       let score = 0;
       const reasons = [];
