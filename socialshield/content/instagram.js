@@ -329,18 +329,24 @@
     /**
      * Lấy User ID từ username qua API
      */
+    _igHeaders() {
+      return {
+        'x-csrftoken': this.getCsrfToken(),
+        'x-ig-app-id': '936619743392459',
+        'x-requested-with': 'XMLHttpRequest',
+        'Accept': 'application/json',
+        'Accept-Language': navigator.language || 'en-US',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+      };
+    },
+
     async fetchUserId(username) {
       try {
         const res = await fetch(
           `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
-          {
-            headers: {
-              'x-csrftoken': this.getCsrfToken(),
-              'x-ig-app-id': '936619743392459',
-              'x-requested-with': 'XMLHttpRequest',
-            },
-            credentials: 'include',
-          }
+          { headers: this._igHeaders(), credentials: 'include' }
         );
 
         if (!res.ok) {
@@ -384,8 +390,9 @@
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && this.isCapturing; attempt++) {
         if (attempt > 1) {
-          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (${userMap.size} users)`);
-          await this.wait(4500 + Math.random() * 500);
+          const backoff = Math.min(Math.pow(2, attempt) * 2000, 30000) + Math.random() * 2000;
+          this.updateProgress(`Verifying ${type}... attempt ${attempt}/${MAX_ATTEMPTS} (waiting ${Math.round(backoff / 1000)}s)`);
+          await this.wait(backoff);
         }
 
         let maxId = null;
@@ -413,11 +420,7 @@
             }
 
             const res = await fetch(url, {
-              headers: {
-                'x-csrftoken': this.getCsrfToken(),
-                'x-ig-app-id': '936619743392459',
-                'x-requested-with': 'XMLHttpRequest',
-              },
+              headers: this._igHeaders(),
               credentials: 'include',
             });
 
@@ -429,6 +432,16 @@
                 hasMore = false;
                 break;
               }
+            }
+
+            // Exponential backoff cho 429 rate limit
+            if (res.status === 429) {
+              const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+              const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(Math.pow(2, page) * 2000, 60000);
+              this.updateProgress(`Rate limited, waiting ${Math.round(waitMs / 1000)}s...`);
+              console.warn(`[SocialShield] Rate limited (429), waiting ${Math.round(waitMs / 1000)}s`);
+              await this.wait(waitMs);
+              continue; // retry same page
             }
 
             if (!res.ok) {
@@ -600,13 +613,27 @@
                 email
               });
               if (breachResult && breachResult.breached) {
+                const src = breachResult.source ? ` (via ${breachResult.source})` : '';
+                const breachNames = (breachResult.breaches || []).filter(b => b && !b.startsWith('Domain'));
+                const detail = breachNames.length > 0
+                  ? `Breaches: ${breachNames.slice(0, 10).join(', ')}${breachNames.length > 10 ? ` +${breachNames.length - 10} more` : ''}`
+                  : '';
                 findings.push({
                   type: 'email_breach',
                   severity: 'critical',
                   icon: '💀',
                   title: 'Email Found in Data Breach',
-                  message: `${email} appeared in ${breachResult.breachCount} known data breach(es)`,
+                  message: `${email} appeared in ${breachResult.breachCount > 0 ? breachResult.breachCount : 'multiple'} known data breach(es)${src}${detail ? '. ' + detail : ''}`,
                   values: breachResult.breaches || []
+                });
+              } else if (breachResult && breachResult.note) {
+                findings.push({
+                  type: 'email_breach',
+                  severity: 'medium',
+                  icon: '⚠️',
+                  title: 'Email Breach Status Unknown',
+                  message: `${email}: ${breachResult.note}`,
+                  values: []
                 });
               }
             } catch (err) {
@@ -616,10 +643,37 @@
         }
       }
 
-      // Check password exposure
+      // Check password exposure + Pwned Passwords DB
       const pwdFindings = SocialShieldScanner.checkPasswordExposure(bioText);
       if (pwdFindings.length > 0) {
         findings.push(...pwdFindings);
+        // Check mỗi password phát hiện được trong Pwned Passwords DB (HIBP, free k-anonymity)
+        const pwdPatterns = [
+          /(?:password|pass|mật khẩu|mk|pw)[:\s=]+['"]?([^\s'"]{4,30})['"]?/gi,
+          /(?:pin|mã pin)[:\s=]+(\d{4,8})/gi,
+        ];
+        for (const pattern of pwdPatterns) {
+          let m;
+          while ((m = pattern.exec(bioText)) !== null) {
+            try {
+              const pwnedResult = await chrome.runtime.sendMessage({
+                type: 'CHECK_PASSWORD_PWNED',
+                password: m[1]
+              });
+              if (pwnedResult && pwnedResult.pwned) {
+                findings.push({
+                  type: 'password_pwned',
+                  severity: 'critical',
+                  icon: '💀',
+                  title: 'Password Found in Breach Database',
+                  message: `Exposed password appeared in ${pwnedResult.count.toLocaleString()} known data breach(es) (HIBP Pwned Passwords)`,
+                  values: []
+                });
+                break;
+              }
+            } catch {}
+          }
+        }
       }
 
       // Thu thập thêm thông tin profile cho phân tích tổng hợp
@@ -635,7 +689,7 @@
 
       // Merge thêm findings từ AI/breach/password vào analysis
       analysis.privacyFindings = [...analysis.privacyFindings, ...findings.filter(f =>
-        ['ai_text_analysis', 'email_breach', 'password_exposed'].includes(f.type)
+        ['ai_text_analysis', 'email_breach', 'password_exposed', 'password_pwned'].includes(f.type)
       )];
 
       // Generate security recommendations

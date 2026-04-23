@@ -17,6 +17,9 @@
     "https://twitter.com/*",
     "https://safebrowsing.googleapis.com/*",
     "https://haveibeenpwned.com/*",
+    "https://api.pwnedpasswords.com/*",
+    "https://api.xposedornot.com/*",
+    "https://hackcheck.woventeams.com/*",
     "http://localhost:*/*"
   ],
   "background": {
