@@ -40,6 +40,9 @@
     "default_popup": "popup/popup.html",
     "default_title": "SocialShield"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https: http://localhost:*"
+  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

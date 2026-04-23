@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check background/service-worker.js)",
+      "Bash(node --check content/instagram.js)",
+      "Bash(node --check content/twitter.js)",
+      "Bash(node --check lib/storage.js)",
+      "Bash(node --check lib/scanner.js)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('manifest.json','utf8'\\)\\); console.log\\('manifest OK'\\)\")"
+    ]
+  }
+}

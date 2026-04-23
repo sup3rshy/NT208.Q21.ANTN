@@ -247,7 +247,20 @@ const InstagramAPI = {
 
 // ==================== Twitter/X API (Background) ====================
 
-const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+// Twitter/X sử dụng bearer token public embed trong web app JS.
+// Token có thể thay đổi → cho phép user override qua settings.
+// Fallback là token đã biết (sẽ thử dùng cho tới khi Twitter rotate).
+const TWITTER_BEARER_FALLBACK = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+async function getTwitterBearer() {
+  try {
+    const { settings } = await chrome.storage.local.get('settings');
+    if (settings?.twitterBearerToken && settings.twitterBearerToken.length > 40) {
+      return settings.twitterBearerToken;
+    }
+  } catch {}
+  return TWITTER_BEARER_FALLBACK;
+}
 
 const TwitterAPI = {
   async getCookies() {
@@ -274,9 +287,10 @@ const TwitterAPI = {
     return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
   },
 
-  getHeaders(csrfToken, cookieHeader) {
+  async getHeaders(csrfToken, cookieHeader) {
+    const bearer = await getTwitterBearer();
     return {
-      'authorization': `Bearer ${TWITTER_BEARER}`,
+      'authorization': `Bearer ${bearer}`,
       'x-csrf-token': csrfToken,
       'x-twitter-active-user': 'yes',
       'x-twitter-auth-type': 'OAuth2Session',
@@ -291,7 +305,7 @@ const TwitterAPI = {
 
       const res = await fetch(
         `https://x.com/i/api/1.1/users/show.json?screen_name=${encodeURIComponent(screenName)}`,
-        { headers: this.getHeaders(csrfToken, cookieHeader) }
+        { headers: await this.getHeaders(csrfToken, cookieHeader) }
       );
 
       if (!res.ok) {
@@ -313,7 +327,7 @@ const TwitterAPI = {
 
     const csrfToken = await this.getCsrfToken();
     const cookieHeader = await this.buildCookieHeader();
-    const headers = this.getHeaders(csrfToken, cookieHeader);
+    const headers = await this.getHeaders(csrfToken, cookieHeader);
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
@@ -387,7 +401,24 @@ const TwitterAPI = {
 
 // ==================== Auto Capture ====================
 
+// Mutex: tránh 2 auto-capture chạy song song (alarm + manual trigger)
+// gây race condition khi đọc/ghi snapshot array.
+let autoCaptureRunning = false;
+
 async function runAutoCapture() {
+  if (autoCaptureRunning) {
+    console.log('[SocialShield] Auto-capture already running, skipping duplicate trigger');
+    return;
+  }
+  autoCaptureRunning = true;
+  try {
+    await _runAutoCaptureImpl();
+  } finally {
+    autoCaptureRunning = false;
+  }
+}
+
+async function _runAutoCaptureImpl() {
   console.log('[SocialShield] Auto-capture triggered');
 
   // Kiểm tra login status cho cả hai nền tảng
@@ -493,6 +524,11 @@ async function saveAutoCaptureSnapshot(profile, type, users, settings) {
   const storageKey = `snapshots_${profile.platform}_${profile.username}_${type}`;
   const existing = (await chrome.storage.local.get(storageKey))[storageKey] || [];
   existing.push(snapshot);
+  // Cap retention để tránh storage.local overflow (đồng bộ với SocialShieldStorage)
+  const SNAPSHOT_LIMIT = 30;
+  if (existing.length > SNAPSHOT_LIMIT) {
+    existing.splice(0, existing.length - SNAPSHOT_LIMIT);
+  }
   await chrome.storage.local.set({ [storageKey]: existing });
 
   // Cập nhật snapshot_index để dashboard thấy snapshot mới
@@ -579,6 +615,83 @@ function computeDiff(oldSnap, newSnap) {
   }
 
   return { addedCount, removedCount };
+}
+
+// ==================== HIBP Cache + Rate-limit Guard ====================
+
+// Cache breach results để giảm tải HIBP API (free tier ~1600 req/day/IP).
+// TTL = 24h là hợp lý — breach data ít thay đổi trong ngày.
+const HIBP_CACHE_TTL = 24 * 60 * 60 * 1000;
+const HIBP_CACHE_KEY = 'hibp_cache';
+// Nếu gặp 429 hoặc 503, tạm dừng gọi HIBP trong cooldown này.
+let hibpCooldownUntil = 0;
+
+async function checkEmailBreachCached(email) {
+  if (!email || typeof email !== 'string') return null;
+  const emailLower = email.toLowerCase().trim();
+
+  // Check cache trước
+  try {
+    const { [HIBP_CACHE_KEY]: cache = {} } = await chrome.storage.local.get(HIBP_CACHE_KEY);
+    const entry = cache[emailLower];
+    if (entry && (Date.now() - entry.at) < HIBP_CACHE_TTL) {
+      return entry.result;
+    }
+  } catch {}
+
+  // Nếu đang trong cooldown → trả null thay vì spam API
+  if (Date.now() < hibpCooldownUntil) {
+    console.warn('[SocialShield] HIBP in cooldown, skipping request');
+    return null;
+  }
+
+  try {
+    const res = await fetch(
+      `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(emailLower)}?truncateResponse=true`,
+      { headers: { 'User-Agent': 'SocialShield-Extension' } }
+    );
+
+    let result;
+    if (res.status === 404) {
+      result = { breached: false, breachCount: 0, breaches: [] };
+    } else if (res.status === 429 || res.status === 503) {
+      // Rate-limited: set cooldown 10 phút, không cache kết quả
+      hibpCooldownUntil = Date.now() + 10 * 60 * 1000;
+      console.warn(`[SocialShield] HIBP ${res.status}, cooldown 10min`);
+      return null;
+    } else if (res.status === 401) {
+      // HIBP API v3 yêu cầu API key cho free tier mới
+      // → bỏ qua để không spam, cache kết quả "unknown"
+      return null;
+    } else if (res.ok) {
+      const breaches = await res.json();
+      result = {
+        breached: true,
+        breachCount: breaches.length,
+        breaches: breaches.map(b => b.Name),
+      };
+    } else {
+      return null;
+    }
+
+    // Cache kết quả hợp lệ
+    try {
+      const { [HIBP_CACHE_KEY]: cache = {} } = await chrome.storage.local.get(HIBP_CACHE_KEY);
+      cache[emailLower] = { result, at: Date.now() };
+      // Prune cache nếu > 500 entries
+      const keys = Object.keys(cache);
+      if (keys.length > 500) {
+        keys.sort((a, b) => cache[a].at - cache[b].at);
+        for (const k of keys.slice(0, keys.length - 500)) delete cache[k];
+      }
+      await chrome.storage.local.set({ [HIBP_CACHE_KEY]: cache });
+    } catch {}
+
+    return result;
+  } catch (err) {
+    console.error('[SocialShield] HIBP fetch error:', err);
+    return null;
+  }
 }
 
 // ==================== Installation ====================
@@ -709,25 +822,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'CHECK_EMAIL_BREACH':
-      (async () => {
-        try {
-          const res = await fetch(
-            `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(message.email)}?truncateResponse=true`,
-            { headers: { 'User-Agent': 'SocialShield-Extension' } }
-          );
-          if (res.status === 404) {
-            sendResponse({ breached: false, breachCount: 0, breaches: [] });
-          } else if (res.ok) {
-            const breaches = await res.json();
-            sendResponse({ breached: true, breachCount: breaches.length, breaches: breaches.map(b => b.Name) });
-          } else {
-            sendResponse(null);
-          }
-        } catch (err) {
-          console.error('[SocialShield] CHECK_EMAIL_BREACH error:', err);
-          sendResponse(null);
-        }
-      })();
+      checkEmailBreachCached(message.email).then(sendResponse).catch(err => {
+        console.error('[SocialShield] CHECK_EMAIL_BREACH error:', err);
+        sendResponse(null);
+      });
       return true;
 
     case 'UPDATE_AUTO_CAPTURE':

@@ -54,16 +54,19 @@
         padding: 16px 20px; max-width: 320px; font-family: -apple-system, sans-serif;
         box-shadow: 0 8px 32px rgba(0,0,0,0.4);
       `;
-      notice.innerHTML = `
-        <div style="color: #ef4444; font-weight: 600; margin-bottom: 8px;">SocialShield - Extension Reloaded</div>
-        <div style="color: #ccc; font-size: 13px; margin-bottom: 12px;">
-          Extension was updated/reloaded. Please refresh this page to reconnect.
-        </div>
-        <button style="
-          background: #ef4444; color: white; border: none; border-radius: 6px;
-          padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
-        " onclick="location.reload()">Refresh Page</button>
-      `;
+      const title = document.createElement('div');
+      title.style.cssText = 'color: #ef4444; font-weight: 600; margin-bottom: 8px;';
+      title.textContent = 'SocialShield - Extension Reloaded';
+      const desc = document.createElement('div');
+      desc.style.cssText = 'color: #ccc; font-size: 13px; margin-bottom: 12px;';
+      desc.textContent = 'Extension was updated/reloaded. Please refresh this page to reconnect.';
+      const btn = document.createElement('button');
+      btn.style.cssText = 'background: #ef4444; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;';
+      btn.textContent = 'Refresh Page';
+      btn.addEventListener('click', () => location.reload());
+      notice.appendChild(title);
+      notice.appendChild(desc);
+      notice.appendChild(btn);
       document.body.appendChild(notice);
     },
 
@@ -766,7 +769,8 @@
           return;
         }
 
-        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers);
+        const whitelist = await SocialShieldStorage.getImpersonationWhitelist('instagram', profile);
+        const suspects = SocialShieldScanner.detectImpersonation(profile, displayName, allUsers, whitelist);
 
         if (suspects.length === 0) {
           this.notify(`No impersonation accounts found among ${allUsers.length} users.`, 'success');
@@ -874,14 +878,17 @@
         const result = SocialShieldTextAnalyzer.analyzeTextRuleBased(text);
         if (result.classification === 'safe') return;
 
-        // Overlay warning badge
+        // Overlay warning badge (DOM API, no innerHTML)
         el.style.position = 'relative';
         const badge = document.createElement('div');
         badge.className = 'ss-scam-badge';
-        badge.title = result.reasoning;
-        badge.innerHTML = result.classification === 'scam'
-          ? '🚨 <span>Scam</span>'
-          : '⚠️ <span>Suspicious</span>';
+        badge.title = result.reasoning || '';
+        const icon = document.createTextNode(result.classification === 'scam' ? '🚨 ' : '⚠️ ');
+        const label = document.createElement('span');
+        label.textContent = result.classification === 'scam' ? 'Scam' : 'Suspicious';
+        label.style.cssText = 'font-size: 10px;';
+        badge.appendChild(icon);
+        badge.appendChild(label);
         badge.style.cssText = `
           position: absolute; top: -2px; right: -2px; z-index: 9999;
           background: ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'};
@@ -890,7 +897,6 @@
           font-family: -apple-system, sans-serif; line-height: 1.2;
           box-shadow: 0 2px 6px rgba(0,0,0,0.3);
         `;
-        badge.querySelector('span').style.cssText = 'font-size: 10px;';
         el.style.outline = `1px solid ${result.classification === 'scam' ? '#ef4444' : '#f59e0b'}`;
         el.style.outlineOffset = '2px';
         el.style.borderRadius = '4px';
@@ -898,30 +904,56 @@
       };
 
       const scanAllComments = () => {
-        // Instagram comments sử dụng nhiều selectors
+        if (!this.isContextValid()) { this.teardownObservers(); return; }
         const commentSelectors = [
-          'ul li span[dir]',                        // Comment text
-          '[class*="Comment"] span',                 // Comment spans
-          'div[role="button"] + span',               // Reply text
+          'ul li span[dir]',
+          '[class*="Comment"] span',
+          'div[role="button"] + span',
         ];
         for (const sel of commentSelectors) {
           document.querySelectorAll(sel).forEach(el => {
-            if (el.closest('.ss-scam-badge')) return; // skip badge elements
+            if (el.closest('.ss-scam-badge')) return;
             if (el.innerText && el.innerText.length > 15) scanComment(el);
           });
         }
       };
 
-      // Scan khi page load
+      // Cancel old observer nếu có (defensive cho SPA re-init)
+      if (this.commentObserver) {
+        try { this.commentObserver.disconnect(); } catch {}
+      }
+
       setTimeout(scanAllComments, 3000);
 
-      // Observe DOM changes cho comments mới (debounced)
+      // Observe scoped area (main > article/section) thay vì toàn body.
+      // Fallback sang body nếu chưa có main element.
       let debounceTimer = null;
-      const observer = new MutationObserver(() => {
+      const observer = new MutationObserver((mutations) => {
+        if (!this.isContextValid()) { this.teardownObservers(); return; }
+        // Chỉ trigger nếu có node thực sự được thêm vào (skip style/attribute mutations)
+        const hasAddedNodes = mutations.some(m => m.addedNodes && m.addedNodes.length > 0);
+        if (!hasAddedNodes) return;
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(scanAllComments, 500);
+        debounceTimer = setTimeout(scanAllComments, 1500);
       });
-      observer.observe(document.body, { childList: true, subtree: true });
+      const target = document.querySelector('main') || document.body;
+      observer.observe(target, { childList: true, subtree: true });
+      this.commentObserver = observer;
+    },
+
+    /**
+     * Disconnect tất cả MutationObservers - gọi khi context invalidated
+     * hoặc re-init để tránh memory leak.
+     */
+    teardownObservers() {
+      if (this.commentObserver) {
+        try { this.commentObserver.disconnect(); } catch {}
+        this.commentObserver = null;
+      }
+      if (this.urlObserver) {
+        try { this.urlObserver.disconnect(); } catch {}
+        this.urlObserver = null;
+      }
     },
 
     // ==================== URL Observer ====================
@@ -939,14 +971,21 @@
     },
 
     observeUrlChanges() {
+      if (this.urlObserver) {
+        try { this.urlObserver.disconnect(); } catch {}
+      }
       let lastUrl = location.href;
       const observer = new MutationObserver(() => {
+        if (!this.isContextValid()) { this.teardownObservers(); return; }
         if (location.href !== lastUrl) {
           lastUrl = location.href;
           this.onUrlChange();
         }
       });
       observer.observe(document.body, { childList: true, subtree: true });
+      this.urlObserver = observer;
+      // Cleanup khi page unload
+      window.addEventListener('pagehide', () => this.teardownObservers(), { once: true });
     },
 
     onUrlChange() {
