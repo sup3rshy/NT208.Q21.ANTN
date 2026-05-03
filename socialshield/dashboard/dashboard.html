@@ -48,9 +48,17 @@
           <span class="ss-nav-icon">⚙️</span>
           <span>Settings</span>
         </a>
+        <a class="ss-nav-item" data-page="about" href="#">
+          <span class="ss-nav-icon">ℹ️</span>
+          <span>About</span>
+        </a>
       </div>
 
       <div class="ss-sidebar-footer">
+        <div class="ss-theme-toggle-wrapper">
+          <span class="ss-theme-icon" id="theme-toggle" title="Toggle Light/Dark Theme">🌙</span>
+          <span class="ss-theme-toggle-label" id="theme-label">Dark Mode</span>
+        </div>
         <div class="ss-version">v1.0.0</div>
       </div>
     </nav>
@@ -273,7 +281,10 @@
         <div class="ss-card">
           <div class="ss-card-header">
             <h2>All Alerts</h2>
-            <button class="ss-btn ss-btn-sm" id="btn-mark-all-read">Mark All Read</button>
+            <div style="display: flex; gap: 8px;">
+              <button class="ss-btn ss-btn-sm" id="btn-export-alerts-html">Export HTML Report</button>
+              <button class="ss-btn ss-btn-sm" id="btn-mark-all-read">Mark All Read</button>
+            </div>
           </div>
           <div class="ss-card-body" id="alert-list">
             <div class="ss-empty-state">
@@ -448,6 +459,151 @@
               </div>
               <button class="ss-btn ss-btn-danger ss-btn-sm" id="btn-clear-all">Clear All</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- About Page -->
+      <div class="ss-page" id="page-about">
+        <div class="ss-page-header">
+          <h1>About SocialShield</h1>
+          <p class="ss-page-desc">Project information and credits</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Project Overview</h2>
+          </div>
+          <div class="ss-card-body">
+            <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px;">
+              <div style="width: 64px; height: 64px; background: var(--accent-dim); border-radius: 16px; display: flex; align-items: center; justify-content: center;">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 2L3 7V17L12 22L21 17V7L12 2Z" stroke="var(--accent)" stroke-width="2" fill="none"/>
+                  <path d="M12 8V12M12 16H12.01" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+              </div>
+              <div>
+                <div style="font-size: 22px; font-weight: 700; color: var(--text-primary);">SocialShield</div>
+                <div style="font-size: 14px; color: var(--text-secondary);">Social Media Security & Connection Monitor</div>
+                <div style="font-size: 12px; color: var(--accent); margin-top: 4px;">Version 1.0.0</div>
+              </div>
+            </div>
+            <p style="font-size: 14px; color: var(--text-secondary); line-height: 1.7;">
+              SocialShield is a Chrome extension designed to help users monitor and protect their social media accounts.
+              It provides real-time connection tracking, privacy scanning, bot detection, link safety checking,
+              and comprehensive security analysis for Instagram and Twitter/X platforms.
+            </p>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Key Features</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-about-features">
+              <div class="ss-about-feature-item">
+                <span class="ss-about-feature-icon">📸</span>
+                <div>
+                  <div class="ss-about-feature-title">Connection Snapshots</div>
+                  <div class="ss-about-feature-desc">Capture and track followers/following lists over time with automatic change detection</div>
+                </div>
+              </div>
+              <div class="ss-about-feature-item">
+                <span class="ss-about-feature-icon">🔍</span>
+                <div>
+                  <div class="ss-about-feature-title">Privacy Scanning</div>
+                  <div class="ss-about-feature-desc">Detect exposed personal information (PII), emails, phone numbers in profiles</div>
+                </div>
+              </div>
+              <div class="ss-about-feature-item">
+                <span class="ss-about-feature-icon">🤖</span>
+                <div>
+                  <div class="ss-about-feature-title">Bot Detection</div>
+                  <div class="ss-about-feature-desc">Identify suspicious bot-like accounts among your followers and following</div>
+                </div>
+              </div>
+              <div class="ss-about-feature-item">
+                <span class="ss-about-feature-icon">🔗</span>
+                <div>
+                  <div class="ss-about-feature-title">Link Safety</div>
+                  <div class="ss-about-feature-desc">Scan links on social media pages for phishing, malware, and other threats</div>
+                </div>
+              </div>
+              <div class="ss-about-feature-item">
+                <span class="ss-about-feature-icon">🎭</span>
+                <div>
+                  <div class="ss-about-feature-title">Impersonation Detection</div>
+                  <div class="ss-about-feature-desc">Find accounts that may be impersonating your identity</div>
+                </div>
+              </div>
+              <div class="ss-about-feature-item">
+                <span class="ss-about-feature-icon">🛡️</span>
+                <div>
+                  <div class="ss-about-feature-title">Security Score</div>
+                  <div class="ss-about-feature-desc">Comprehensive security assessment with actionable recommendations</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Course Information</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-about-info-grid">
+              <div class="ss-about-info-item">
+                <div class="ss-about-info-label">Course</div>
+                <div class="ss-about-info-value">NT208 - Network Security</div>
+              </div>
+              <div class="ss-about-info-item">
+                <div class="ss-about-info-label">Class</div>
+                <div class="ss-about-info-value">NT208.Q21.ANTN</div>
+              </div>
+              <div class="ss-about-info-item">
+                <div class="ss-about-info-label">University</div>
+                <div class="ss-about-info-value">University of Information Technology (UIT)</div>
+              </div>
+              <div class="ss-about-info-item">
+                <div class="ss-about-info-label">Semester</div>
+                <div class="ss-about-info-value">2024 - 2025</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Technology Stack</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-about-tech-list">
+              <span class="ss-about-tech-badge">Chrome Manifest V3</span>
+              <span class="ss-about-tech-badge">JavaScript (ES6+)</span>
+              <span class="ss-about-tech-badge">Chrome Storage API</span>
+              <span class="ss-about-tech-badge">Chart.js</span>
+              <span class="ss-about-tech-badge">Instagram API</span>
+              <span class="ss-about-tech-badge">Twitter/X API</span>
+              <span class="ss-about-tech-badge">Google Safe Browsing</span>
+              <span class="ss-about-tech-badge">HaveIBeenPwned API</span>
+              <span class="ss-about-tech-badge">OpenAI (AI Analysis)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>License & Disclaimer</h2>
+          </div>
+          <div class="ss-card-body">
+            <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.7;">
+              This extension is developed for educational purposes as part of the NT208 Network Security course
+              at the University of Information Technology (UIT). It is intended to demonstrate security monitoring
+              concepts and should be used responsibly and in accordance with the terms of service of the respective
+              social media platforms.
+            </p>
           </div>
         </div>
       </div>

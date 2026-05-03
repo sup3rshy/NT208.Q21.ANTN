@@ -15,8 +15,32 @@
     async init() {
       this.bindNavigation();
       this.bindActions();
+      this.initThemeToggle();
       await this.loadOverview();
       await this.loadCompareSelectors();
+    },
+
+    // ==================== Theme Toggle ====================
+
+    initThemeToggle() {
+      const toggle = document.getElementById('theme-toggle');
+      const label = document.getElementById('theme-label');
+      if (!toggle) return;
+
+      // Load saved theme preference
+      const savedTheme = localStorage.getItem('ss-theme') || 'dark';
+      if (savedTheme === 'light') {
+        document.body.classList.add('ss-light-theme');
+        toggle.textContent = '☀️';
+        label.textContent = 'Light Mode';
+      }
+
+      toggle.addEventListener('click', () => {
+        const isLight = document.body.classList.toggle('ss-light-theme');
+        toggle.textContent = isLight ? '☀️' : '🌙';
+        label.textContent = isLight ? 'Light Mode' : 'Dark Mode';
+        localStorage.setItem('ss-theme', isLight ? 'light' : 'dark');
+      });
     },
 
     // ==================== Navigation ====================
@@ -51,6 +75,7 @@
         case 'alerts': this.loadAlerts(); break;
         case 'settings': this.loadSettings(); break;
         case 'security': this.loadSecurityScore(); break;
+        case 'about': break; // Static page, no data loading needed
       }
     },
 
@@ -922,6 +947,98 @@
 
     // ==================== Export Reports ====================
 
+    async exportAlertsHTML() {
+      const alerts = await SocialShieldStorage.getAlerts(100);
+      if (alerts.length === 0) {
+        alert('No alerts to export.');
+        return;
+      }
+
+      const severityColors = { danger: '#ef4444', warning: '#f59e0b', info: '#3b82f6' };
+      const severityIcons = { danger: '&#x1F6A8;', warning: '&#x26A0;&#xFE0F;', info: '&#x2139;&#xFE0F;' };
+      const now = new Date().toLocaleString();
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SocialShield - Alerts Report</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f7; color: #1a1a2e; padding: 40px; }
+    .report-header { text-align: center; margin-bottom: 32px; }
+    .report-header h1 { font-size: 28px; color: #1a1a2e; }
+    .report-header p { font-size: 14px; color: #666; margin-top: 8px; }
+    .report-stats { display: flex; justify-content: center; gap: 24px; margin-bottom: 32px; }
+    .report-stat { text-align: center; padding: 16px 24px; background: white; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .report-stat-value { font-size: 28px; font-weight: 700; }
+    .report-stat-label { font-size: 12px; color: #888; margin-top: 4px; }
+    .alert-card { display: flex; gap: 12px; padding: 16px; margin-bottom: 8px; border-radius: 8px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.06); border-left: 4px solid #ddd; }
+    .alert-card.danger { border-left-color: #ef4444; }
+    .alert-card.warning { border-left-color: #f59e0b; }
+    .alert-card.info { border-left-color: #3b82f6; }
+    .alert-icon { font-size: 20px; flex-shrink: 0; }
+    .alert-content { flex: 1; }
+    .alert-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .alert-message { font-size: 13px; color: #555; line-height: 1.5; }
+    .alert-meta { font-size: 11px; color: #999; margin-top: 6px; }
+    .report-footer { text-align: center; margin-top: 32px; font-size: 12px; color: #999; }
+    @media print { body { padding: 20px; } .report-stat { box-shadow: none; border: 1px solid #eee; } .alert-card { box-shadow: none; border: 1px solid #eee; } }
+  </style>
+</head>
+<body>
+  <div class="report-header">
+    <h1>SocialShield Alerts Report</h1>
+    <p>Generated on ${this.escapeHtml(now)}</p>
+  </div>
+  <div class="report-stats">
+    <div class="report-stat">
+      <div class="report-stat-value">${alerts.length}</div>
+      <div class="report-stat-label">Total Alerts</div>
+    </div>
+    <div class="report-stat">
+      <div class="report-stat-value" style="color: #ef4444;">${alerts.filter(a => a.severity === 'danger').length}</div>
+      <div class="report-stat-label">Critical</div>
+    </div>
+    <div class="report-stat">
+      <div class="report-stat-value" style="color: #f59e0b;">${alerts.filter(a => a.severity === 'warning').length}</div>
+      <div class="report-stat-label">Warnings</div>
+    </div>
+    <div class="report-stat">
+      <div class="report-stat-value" style="color: #3b82f6;">${alerts.filter(a => a.severity === 'info').length}</div>
+      <div class="report-stat-label">Info</div>
+    </div>
+  </div>
+  ${alerts.map(a => `
+    <div class="alert-card ${a.severity || 'info'}">
+      <div class="alert-icon">${severityIcons[a.severity] || severityIcons.info}</div>
+      <div class="alert-content">
+        <div class="alert-title">${this.escapeHtml(a.title || a.type || 'Alert')}</div>
+        <div class="alert-message">${this.escapeHtml(a.message || '')}</div>
+        <div class="alert-meta">
+          ${a.username ? `@${this.escapeHtml(a.username)}` : ''}
+          ${a.platform ? ` &middot; ${this.escapeHtml(this.platformLabel(a.platform))}` : ''}
+          &middot; ${this.formatDate(a.timestamp)}
+          ${a.read ? ' &middot; Read' : ' &middot; <strong>Unread</strong>'}
+        </div>
+      </div>
+    </div>
+  `).join('')}
+  <div class="report-footer">
+    <p>SocialShield v1.0.0 &mdash; Social Media Security & Connection Monitor</p>
+  </div>
+</body>
+</html>`;
+
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `socialshield-alerts-${new Date().toISOString().slice(0, 10)}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+
     async exportSecurityReportCSV() {
       const allData = await SocialShieldStorage.getAll();
       const rows = [['Type', 'Platform', 'Username', 'Severity', 'Title', 'Message', 'Timestamp']];
@@ -1106,6 +1223,11 @@
         }
         await SocialShieldStorage.remove('snapshot_index');
         this.loadSnapshots();
+      });
+
+      // Export alerts as HTML report
+      document.getElementById('btn-export-alerts-html').addEventListener('click', () => {
+        this.exportAlertsHTML();
       });
 
       // Mark all alerts read
