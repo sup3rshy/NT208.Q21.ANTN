@@ -406,6 +406,56 @@
 
         <div class="ss-card">
           <div class="ss-card-header">
+            <h2>VirusTotal API</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">API Key</div>
+                <div class="ss-setting-desc">Multi-engine malware/phishing scan (60+ AVs). Free tier: 4 req/min, 500/day. Get one at <a href="https://www.virustotal.com/gui/my-apikey" target="_blank" style="color: var(--accent);">virustotal.com</a></div>
+              </div>
+              <input type="password" class="ss-input" id="setting-vt-apikey" placeholder="64-char hex key" style="width: 260px;">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Enable VirusTotal</div>
+                <div class="ss-setting-desc">Check links against 60+ antivirus engines (requires API key)</div>
+              </div>
+              <label class="ss-toggle">
+                <input type="checkbox" id="setting-vt-enabled">
+                <span class="ss-toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>URLhaus (abuse.ch)</h2>
+          </div>
+          <div class="ss-card-body">
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Auth Key</div>
+                <div class="ss-setting-desc">Database of known malware distribution URLs. Free auth key at <a href="https://auth.abuse.ch" target="_blank" style="color: var(--accent);">auth.abuse.ch</a></div>
+              </div>
+              <input type="password" class="ss-input" id="setting-urlhaus-apikey" placeholder="abuse.ch auth key" style="width: 260px;">
+            </div>
+            <div class="ss-setting-row">
+              <div class="ss-setting-info">
+                <div class="ss-setting-label">Enable URLhaus</div>
+                <div class="ss-setting-desc">Check links against abuse.ch malware URL database (requires auth key)</div>
+              </div>
+              <label class="ss-toggle">
+                <input type="checkbox" id="setting-urlhaus-enabled">
+                <span class="ss-toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
             <h2>AI Text Analysis</h2>
           </div>
           <div class="ss-card-body">

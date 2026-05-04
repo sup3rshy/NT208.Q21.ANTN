@@ -1107,6 +1107,10 @@
       document.getElementById('setting-capture-interval').value = String(settings.captureInterval || 360);
       document.getElementById('setting-sb-apikey').value = settings.safeBrowsingApiKey || '';
       document.getElementById('setting-sb-enabled').checked = !!settings.safeBrowsingEnabled;
+      document.getElementById('setting-vt-apikey').value = settings.virusTotalApiKey || '';
+      document.getElementById('setting-vt-enabled').checked = !!settings.virusTotalEnabled;
+      document.getElementById('setting-urlhaus-apikey').value = settings.urlhausAuthKey || '';
+      document.getElementById('setting-urlhaus-enabled').checked = !!settings.urlhausEnabled;
       document.getElementById('setting-ai-url').value = settings.aiAnalysisUrl || 'http://localhost:3456';
       document.getElementById('setting-ai-enabled').checked = !!settings.aiAnalysisEnabled;
     },
@@ -1118,6 +1122,10 @@
         captureInterval: parseInt(document.getElementById('setting-capture-interval').value) || 360,
         safeBrowsingApiKey: document.getElementById('setting-sb-apikey').value.trim(),
         safeBrowsingEnabled: document.getElementById('setting-sb-enabled').checked,
+        virusTotalApiKey: document.getElementById('setting-vt-apikey').value.trim(),
+        virusTotalEnabled: document.getElementById('setting-vt-enabled').checked,
+        urlhausAuthKey: document.getElementById('setting-urlhaus-apikey').value.trim(),
+        urlhausEnabled: document.getElementById('setting-urlhaus-enabled').checked,
         aiAnalysisUrl: document.getElementById('setting-ai-url').value.trim() || 'http://localhost:3456',
         aiAnalysisEnabled: document.getElementById('setting-ai-enabled').checked,
         suspiciousThreshold: {

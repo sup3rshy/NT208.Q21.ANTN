@@ -855,23 +855,34 @@
     async runLinkScan() {
       this.notify('Scanning links on this page...', 'info');
 
-      // Check if Safe Browsing API is enabled
-      let sbApiKey = null;
+      // Build threat-intel options từ settings
+      const opts = {};
       try {
         const settings = await SocialShieldStorage.getSettings();
         if (settings.safeBrowsingEnabled && settings.safeBrowsingApiKey) {
-          sbApiKey = settings.safeBrowsingApiKey;
+          opts.safeBrowsingApiKey = settings.safeBrowsingApiKey;
+        }
+        if (settings.virusTotalEnabled && settings.virusTotalApiKey) {
+          opts.virusTotalApiKey = settings.virusTotalApiKey;
+        }
+        if (settings.urlhausEnabled && settings.urlhausAuthKey) {
+          opts.urlhausAuthKey = settings.urlhausAuthKey;
         }
       } catch (e) { /* ignore */ }
 
-      // If Safe Browsing enabled, use checkLinkFull for each external link
+      const useFullCheck = Object.keys(opts).length > 0;
+
       let results;
-      if (sbApiKey) {
-        this.notify('Checking links with Google Safe Browsing...', 'info');
+      if (useFullCheck) {
+        const engines = [];
+        if (opts.safeBrowsingApiKey) engines.push('Safe Browsing');
+        if (opts.virusTotalApiKey) engines.push('VirusTotal');
+        if (opts.urlhausAuthKey) engines.push('URLhaus');
+        this.notify(`Checking links with ${engines.join(' + ')}...`, 'info');
         const links = SocialShieldScanner.scanAllLinks(document);
         results = [];
         for (const linkResult of links) {
-          const fullResult = await SocialShieldScanner.checkLinkFull(linkResult.url, sbApiKey);
+          const fullResult = await SocialShieldScanner.checkLinkFull(linkResult.url, opts);
           fullResult.element = linkResult.element;
           fullResult.text = linkResult.text;
           results.push(fullResult);

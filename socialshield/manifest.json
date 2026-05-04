@@ -16,6 +16,8 @@
     "https://x.com/*",
     "https://twitter.com/*",
     "https://safebrowsing.googleapis.com/*",
+    "https://www.virustotal.com/*",
+    "https://urlhaus-api.abuse.ch/*",
     "https://haveibeenpwned.com/*",
     "https://api.pwnedpasswords.com/*",
     "https://api.xposedornot.com/*",

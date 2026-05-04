@@ -149,15 +149,22 @@ const SocialShieldStorage = {
       const fields = [
         { key: 'bio', label: 'Bio' },
         { key: 'displayName', label: 'Display Name' },
-        { key: 'profilePicUrl', label: 'Profile Picture' },
-        { key: 'externalUrl', label: 'External Link' },
+        { key: 'profilePicUrl', label: 'Profile Picture', normalize: 'imageUrl' },
+        { key: 'externalUrl', label: 'External Link', normalize: 'url' },
         { key: 'isPrivate', label: 'Account Privacy' },
         { key: 'isVerified', label: 'Verification Status' },
       ];
       for (const f of fields) {
         const oldVal = prev[f.key];
         const newVal = entry[f.key];
-        if (oldVal !== undefined && newVal !== undefined && String(oldVal) !== String(newVal)) {
+        if (oldVal === undefined || newVal === undefined) continue;
+
+        // CDN URLs (đặc biệt Instagram fbcdn) có signed query params đổi liên tục
+        // dù ảnh không đổi → normalize trước khi so sánh
+        const oldNorm = this._normalizeForCompare(oldVal, f.normalize);
+        const newNorm = this._normalizeForCompare(newVal, f.normalize);
+
+        if (oldNorm !== newNorm) {
           changes.push({
             field: f.key,
             label: f.label,
@@ -296,6 +303,40 @@ const SocialShieldStorage = {
     const key = this._snapshotKey(platform, username, type);
     index[key] = { platform, username, type, lastUpdated: Date.now() };
     await this.set('snapshot_index', index);
+  },
+
+  /**
+   * Chuẩn hóa giá trị để so sánh thay đổi profile.
+   * - 'imageUrl': dành cho profile pic CDN. Instagram fbcdn URL có signed query
+   *   (`stp`, `_nc_ht`, `_nc_cat`, `oh`, `oe`, ...) refresh mỗi vài phút mặc dù
+   *   ảnh không đổi. Strip toàn bộ query, chỉ giữ origin + pathname để diff.
+   *   Pathname Instagram dạng `/v/t51.../{hash}_{n}.jpg` ổn định cho cùng 1 ảnh.
+   * - 'url': bio external link, strip tracking params phổ biến (utm_*, fbclid, gclid).
+   */
+  _normalizeForCompare(value, mode) {
+    if (value === null || value === undefined) return '';
+    const str = String(value);
+    if (!mode) return str;
+
+    try {
+      const u = new URL(str);
+      if (mode === 'imageUrl') {
+        // Bỏ toàn bộ query string — CDN signed params không có ý nghĩa identity
+        return `${u.origin}${u.pathname}`;
+      }
+      if (mode === 'url') {
+        // Bỏ tracking params nhưng giữ params khác
+        const drop = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term',
+                      'utm_content', 'fbclid', 'gclid', 'mc_cid', 'mc_eid',
+                      '_ga', 'igshid', 'igsh'];
+        for (const p of drop) u.searchParams.delete(p);
+        // Bỏ trailing slash để `/path` và `/path/` coi như giống nhau
+        const path = u.pathname.replace(/\/$/, '');
+        return `${u.origin}${path}${u.search}`;
+      }
+    } catch { /* không phải URL hợp lệ → so sánh raw */ }
+
+    return str;
   },
 
   _calculateRiskScore(results) {

@@ -733,25 +733,175 @@ const SocialShieldScanner = {
     }
   },
 
+  // ==================== VirusTotal API ====================
+
   /**
-   * Kiểm tra link kết hợp heuristic + Google Safe Browsing API
+   * Kiểm tra URL qua VirusTotal v3 API (multi-engine, 60+ AVs)
+   * Free tier: 4 req/min, 500/day, 15.5K/month
    * @param {string} url
-   * @param {string} apiKey - Google Safe Browsing API key (optional)
-   * @returns {Object} kết quả kiểm tra
+   * @param {string} apiKey - VirusTotal API key
+   * @returns {Object|null}
    */
-  async checkLinkFull(url, apiKey) {
-    // Chạy heuristic check trước (nhanh)
+  async checkVirusTotal(url, apiKey) {
+    if (!apiKey || !url) return null;
+
+    try {
+      // VT v3 URL identifier: base64url của URL, không padding
+      const urlId = btoa(unescape(encodeURIComponent(url)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+      const res = await fetch(`https://www.virustotal.com/api/v3/urls/${urlId}`, {
+        headers: { 'x-apikey': apiKey, 'Accept': 'application/json' }
+      });
+
+      // URL chưa từng được phân tích → submit cho VT scan
+      if (res.status === 404) {
+        try {
+          await fetch('https://www.virustotal.com/api/v3/urls', {
+            method: 'POST',
+            headers: {
+              'x-apikey': apiKey,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: `url=${encodeURIComponent(url)}`
+          });
+        } catch { /* ignore */ }
+        return { unsafe: false, pending: true, source: 'VirusTotal' };
+      }
+
+      if (!res.ok) {
+        console.error(`[SocialShield] VirusTotal API error: ${res.status}`);
+        return null;
+      }
+
+      const data = await res.json();
+      const stats = data?.data?.attributes?.last_analysis_stats || {};
+      const malicious = stats.malicious || 0;
+      const suspicious = stats.suspicious || 0;
+      const harmless = stats.harmless || 0;
+      const undetected = stats.undetected || 0;
+      const total = malicious + suspicious + harmless + undetected;
+
+      // ≥2 engines malicious, hoặc 1 malicious + 1 suspicious → unsafe
+      const unsafe = malicious >= 2 || (malicious >= 1 && suspicious >= 1);
+
+      const results = data?.data?.attributes?.last_analysis_results || {};
+      const threatNames = [...new Set(
+        Object.values(results)
+          .filter(r => r.category === 'malicious' || r.category === 'suspicious')
+          .map(r => r.result)
+          .filter(Boolean)
+      )].slice(0, 5);
+
+      return {
+        unsafe,
+        malicious,
+        suspicious,
+        harmless,
+        total,
+        threatNames,
+        reputation: data?.data?.attributes?.reputation,
+        source: 'VirusTotal',
+      };
+    } catch (err) {
+      console.error('[SocialShield] VirusTotal API error:', err);
+      return null;
+    }
+  },
+
+  // ==================== URLhaus (abuse.ch) ====================
+
+  /**
+   * Kiểm tra URL qua URLhaus database (abuse.ch) - chuyên malware distribution URLs
+   * Yêu cầu Auth-Key miễn phí từ https://auth.abuse.ch
+   * @param {string} url
+   * @param {string} authKey
+   * @returns {Object|null}
+   */
+  async checkURLhaus(url, authKey) {
+    if (!authKey || !url) return null;
+
+    try {
+      const res = await fetch('https://urlhaus-api.abuse.ch/v1/url/', {
+        method: 'POST',
+        headers: {
+          'Auth-Key': authKey,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `url=${encodeURIComponent(url)}`
+      });
+
+      if (!res.ok) {
+        console.error(`[SocialShield] URLhaus API error: ${res.status}`);
+        return null;
+      }
+
+      const data = await res.json();
+
+      if (data.query_status === 'no_results') {
+        return { unsafe: false, source: 'URLhaus' };
+      }
+
+      if (data.query_status === 'ok') {
+        return {
+          unsafe: true,
+          threat: data.threat || 'malware_download',
+          tags: data.tags || [],
+          urlStatus: data.url_status,
+          dateAdded: data.date_added,
+          source: 'URLhaus',
+        };
+      }
+
+      return null;
+    } catch (err) {
+      console.error('[SocialShield] URLhaus API error:', err);
+      return null;
+    }
+  },
+
+  // ==================== Combined Link Check ====================
+
+  /**
+   * Kiểm tra link kết hợp heuristic + Google Safe Browsing + VirusTotal + URLhaus
+   * @param {string} url
+   * @param {Object|string} options - { safeBrowsingApiKey, virusTotalApiKey, urlhausAuthKey }
+   *                                  Truyền string = legacy safeBrowsingApiKey
+   * @returns {Object}
+   */
+  async checkLinkFull(url, options) {
+    if (typeof options === 'string') options = { safeBrowsingApiKey: options };
+    options = options || {};
+
     const result = this.checkLink(url);
 
-    // Nếu có API key, chạy Safe Browsing check song song
-    if (apiKey) {
-      const sbResult = await this.checkSafeBrowsing(url, apiKey);
-      if (sbResult) {
+    const tasks = [];
+    if (options.safeBrowsingApiKey) {
+      tasks.push(['safeBrowsing', this.checkSafeBrowsing(url, options.safeBrowsingApiKey)]);
+    }
+    if (options.virusTotalApiKey) {
+      tasks.push(['virusTotal', this.checkVirusTotal(url, options.virusTotalApiKey)]);
+    }
+    if (options.urlhausAuthKey) {
+      tasks.push(['urlhaus', this.checkURLhaus(url, options.urlhausAuthKey)]);
+    }
+
+    if (tasks.length === 0) return result;
+
+    const settled = await Promise.allSettled(tasks.map(t => t[1]));
+
+    for (let i = 0; i < settled.length; i++) {
+      const name = tasks[i][0];
+      const outcome = settled[i];
+      if (outcome.status !== 'fulfilled' || !outcome.value) continue;
+      const data = outcome.value;
+
+      if (name === 'safeBrowsing') {
         result.safeBrowsingChecked = true;
-        if (sbResult.unsafe) {
+        if (data.unsafe) {
           result.safe = false;
           result.score = Math.max(result.score - 60, 0);
-          for (const threat of sbResult.threats) {
+          for (const threat of data.threats) {
             result.warnings.push({
               type: 'google_safe_browsing',
               severity: 'critical',
@@ -759,8 +909,48 @@ const SocialShieldScanner = {
             });
           }
         }
+      } else if (name === 'virusTotal') {
+        result.virusTotalChecked = true;
+        result.virusTotalStats = {
+          malicious: data.malicious,
+          suspicious: data.suspicious,
+          total: data.total,
+          pending: data.pending || false,
+        };
+        if (data.unsafe) {
+          result.safe = false;
+          result.score = Math.max(result.score - 60, 0);
+          const names = data.threatNames?.length ? ` (${data.threatNames.join(', ')})` : '';
+          result.warnings.push({
+            type: 'virustotal',
+            severity: 'critical',
+            message: `VirusTotal: ${data.malicious}/${data.total} engines flagged as malicious${names}`
+          });
+        } else if (data.suspicious >= 2) {
+          result.score = Math.max(result.score - 20, 0);
+          result.warnings.push({
+            type: 'virustotal',
+            severity: 'medium',
+            message: `VirusTotal: ${data.suspicious} engines flagged as suspicious`
+          });
+        }
+      } else if (name === 'urlhaus') {
+        result.urlhausChecked = true;
+        if (data.unsafe) {
+          result.safe = false;
+          result.score = Math.max(result.score - 70, 0);
+          const tagStr = data.tags?.length ? ` [${data.tags.slice(0, 3).join(', ')}]` : '';
+          const status = data.urlStatus === 'online' ? ' - currently ONLINE' : '';
+          result.warnings.push({
+            type: 'urlhaus',
+            severity: 'critical',
+            message: `URLhaus: known malware distribution URL (${data.threat})${tagStr}${status}`
+          });
+        }
       }
     }
+
+    if (result.score < 50) result.safe = false;
 
     return result;
   },
