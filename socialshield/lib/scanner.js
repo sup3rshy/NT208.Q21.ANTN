@@ -1558,6 +1558,25 @@ const SocialShieldScanner = {
           } catch {}
         }
 
+        // 6. Perceptual hash matching — bằng chứng mạnh nhất khi user upload
+        // cùng ảnh lên 2 platform (URL khác nhau, hash giống).
+        if (a.profilePicHash && b.profilePicHash) {
+          const cmp = (typeof SocialShieldImageAnalyzer !== 'undefined')
+            ? SocialShieldImageAnalyzer.compareHashes(a.profilePicHash, b.profilePicHash)
+            : null;
+          if (cmp) {
+            if (cmp.identical) {
+              signals.push({ type: 'identical_profile_pic_hash', weight: 70,
+                detail: `Identical profile picture (aHash match)` });
+              pairScore += 70;
+            } else if (cmp.similar) {
+              signals.push({ type: 'similar_profile_pic_hash', weight: 50,
+                detail: `Very similar profile picture (Hamming distance ${cmp.distance}/64)` });
+              pairScore += 50;
+            }
+          }
+        }
+
         if (pairScore >= 30) {
           pairs.push({
             a: { platform: a.platform, username: a.username },

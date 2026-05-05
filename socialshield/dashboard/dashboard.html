@@ -370,8 +370,60 @@
             <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
               <input type="file" class="ss-input" id="tool-image-input" accept="image/*" style="flex: 1; min-width: 200px;">
               <button class="ss-btn ss-btn-primary" id="btn-tool-image-scan">Scan</button>
+              <button class="ss-btn" id="btn-tool-image-safe" title="Strip EXIF + cover QR + downloadable safe version">🛡️ Generate safe version</button>
             </div>
             <div id="tool-image-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🔎 Reverse Image Search</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Paste URL ảnh bất kỳ (vd profile pic, post thumbnail) → mở reverse search trên Google Lens / Yandex / TinEye / Bing để tìm ảnh đó còn xuất hiện ở đâu (forum cũ, dating app, blog...).
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" class="ss-input" id="tool-revsearch-url" placeholder="https://...image.jpg" style="flex: 1;">
+              <button class="ss-btn" id="btn-revsearch-google">Google Lens</button>
+              <button class="ss-btn" id="btn-revsearch-yandex">Yandex</button>
+              <button class="ss-btn" id="btn-revsearch-tineye">TinEye</button>
+              <button class="ss-btn" id="btn-revsearch-bing">Bing</button>
+            </div>
+            <div id="tool-revsearch-hint" style="font-size: 11px; color: var(--text-secondary);">Yandex thường có kết quả tốt nhất cho ảnh người (face match).</div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🗺️ Geo Pattern Heatmap</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Tổng hợp location từ recent posts của profile đã quét trên Instagram. Cluster theo địa điểm — phát hiện pattern (nơi sống, đi học, hangout).
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" class="ss-input" id="tool-geo-username" placeholder="Instagram username (đã chạy Privacy Scan trước)" style="flex: 1;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-geo-load">Load</button>
+            </div>
+            <div id="tool-geo-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🚪 Connected Apps Revocation</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Mỗi app đã cấp OAuth là 1 attack surface. Nên revoke định kỳ các app không còn dùng.
+              <br>Extension không thể tự revoke (cần user click), nhưng deep-link tới đúng trang Settings để rút ngắn workflow.
+            </p>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="ss-btn" id="btn-revoke-ig">📷 Open IG manage access</button>
+              <button class="ss-btn" id="btn-revoke-x">🐦 Open X connected apps</button>
+              <button class="ss-btn" id="btn-revoke-google">🔑 Open Google 3rd-party access</button>
+              <button class="ss-btn" id="btn-revoke-fb">👤 Open Facebook business integrations</button>
+              <button class="ss-btn" id="btn-revoke-github">🐙 Open GitHub authorized apps</button>
+            </div>
+            <div style="margin-top: 12px; padding: 8px; background: rgba(255,255,255,0.04); border-radius: 4px; font-size: 12px; color: var(--text-secondary);">
+              <b>Quick checklist:</b> revoke app nếu (1) không dùng &gt;6 tháng, (2) scope quá rộng (read+write all), (3) bạn không nhận ra tên app, (4) app từ developer đã shut down.
+            </div>
           </div>
         </div>
 

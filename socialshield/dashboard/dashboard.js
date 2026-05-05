@@ -1442,6 +1442,106 @@
         out.innerHTML = html;
       });
 
+      // ============= Safe Image Generator =============
+      document.getElementById('btn-tool-image-safe').addEventListener('click', async () => {
+        const out = document.getElementById('tool-image-result');
+        const file = document.getElementById('tool-image-input').files?.[0];
+        if (!file) { alert('Choose an image first'); return; }
+        const status = document.createElement('div');
+        status.style.cssText = 'margin-top: 12px; padding: 10px; background: rgba(255,255,255,0.04); border-radius: 4px;';
+        status.innerHTML = '<div style="color: var(--text-secondary);">⏳ Generating safe version...</div>';
+        out.appendChild(status);
+        try {
+          const { blob, info } = await SocialShieldImageAnalyzer.generateSafeImage(file);
+          const url = URL.createObjectURL(blob);
+          let html = '<h3 style="margin: 0 0 8px;">🛡️ Safe version ready</h3><ul style="margin: 0; padding-left: 18px;">';
+          if (info.exifStripped) html += '<li>EXIF metadata stripped (GPS, camera, datetime removed)</li>';
+          if (info.qrCovered) html += `<li style="color: orange;">QR code covered (data was: <code style="font-size: 10px;">${this._escapeHtml((info.qrData || '').substring(0, 50))}...</code>)</li>`;
+          if (info.idCardWarning) html += `<li style="color: var(--danger);">⚠ Image looks like ID card (confidence ${Math.round(info.idCardConfidence * 100)}%) — KHÔNG tự crop, bạn nên KHÔNG đăng ảnh này.</li>`;
+          html += '</ul>';
+          html += `<div style="margin-top: 10px;"><a href="${url}" download="safe_${file.name.replace(/\.\w+$/, '')}.jpg" class="ss-btn ss-btn-primary" style="display: inline-block; padding: 8px 14px;">⬇ Download safe image</a></div>`;
+          html += `<div style="margin-top: 8px;"><img src="${url}" style="max-width: 100%; max-height: 300px; border-radius: 6px;"></div>`;
+          status.innerHTML = html;
+        } catch (err) {
+          status.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      });
+
+      // ============= Reverse Image Search =============
+      const openRevSearch = (engineFn) => {
+        const url = document.getElementById('tool-revsearch-url').value.trim();
+        if (!url) { alert('Paste image URL first'); return; }
+        window.open(engineFn(encodeURIComponent(url)), '_blank');
+      };
+      document.getElementById('btn-revsearch-google').addEventListener('click', () =>
+        openRevSearch(u => `https://lens.google.com/uploadbyurl?url=${u}`));
+      document.getElementById('btn-revsearch-yandex').addEventListener('click', () =>
+        openRevSearch(u => `https://yandex.com/images/search?rpt=imageview&url=${u}`));
+      document.getElementById('btn-revsearch-tineye').addEventListener('click', () =>
+        openRevSearch(u => `https://tineye.com/search/?url=${u}`));
+      document.getElementById('btn-revsearch-bing').addEventListener('click', () =>
+        openRevSearch(u => `https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${u}`));
+
+      // ============= Geo Heatmap =============
+      document.getElementById('btn-tool-geo-load').addEventListener('click', async () => {
+        const username = document.getElementById('tool-geo-username').value.trim();
+        const out = document.getElementById('tool-geo-result');
+        if (!username) { out.innerHTML = '<div style="color:var(--danger);">Enter username</div>'; return; }
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Fetching recent posts...</div>';
+        try {
+          const info = await chrome.runtime.sendMessage({ type: 'FETCH_PROFILE_INFO', username });
+          if (!info) {
+            out.innerHTML = '<div style="color:var(--danger);">Could not fetch profile (must be logged into Instagram).</div>';
+            return;
+          }
+          const posts = info.recentPosts || [];
+          const withLoc = posts.filter(p => p.location);
+          if (withLoc.length === 0) {
+            out.innerHTML = `<div style="color: var(--accent);">✓ ${posts.length} recent posts checked, none have location tags. Good privacy.</div>`;
+            return;
+          }
+          // Cluster by location.name
+          const cluster = {};
+          for (const p of withLoc) {
+            const loc = p.location;
+            if (!cluster[loc]) cluster[loc] = { name: loc, count: 0, posts: [] };
+            cluster[loc].count++;
+            cluster[loc].posts.push(p);
+          }
+          const clusters = Object.values(cluster).sort((a, b) => b.count - a.count);
+
+          let html = `<div style="margin-bottom: 12px; font-size: 13px;"><b>${withLoc.length}</b>/${posts.length} posts có location → <b>${clusters.length}</b> địa điểm khác nhau:</div>`;
+          html += '<table style="width:100%; border-collapse: collapse;">';
+          html += '<thead><tr style="border-bottom: 1px solid var(--border);"><th style="text-align:left;padding:6px;">Location</th><th style="text-align:left;padding:6px;">Posts</th><th style="text-align:left;padding:6px;">Map</th></tr></thead><tbody>';
+          for (const c of clusters) {
+            const heatColor = c.count >= 3 ? 'var(--danger)' : c.count >= 2 ? 'orange' : 'var(--text-secondary)';
+            html += `<tr><td style="padding:6px;">${this._escapeHtml(c.name)}</td><td style="padding:6px; color: ${heatColor}; font-weight: 600;">${c.count}×</td><td style="padding:6px;"><a href="https://www.google.com/maps/search/${encodeURIComponent(c.name)}" target="_blank" style="color: var(--accent);">→ Maps</a></td></tr>`;
+          }
+          html += '</tbody></table>';
+
+          // Top location warning
+          if (clusters[0] && clusters[0].count >= 3) {
+            html += `<div style="margin-top: 12px; padding: 10px; background: rgba(239,68,68,0.1); border-left: 3px solid var(--danger); border-radius: 4px; font-size: 13px;">⚠ <b>"${this._escapeHtml(clusters[0].name)}"</b> xuất hiện ${clusters[0].count} lần → khả năng cao là nơi user sống/làm việc thường xuyên. Attacker có thể dùng để stalking.</div>`;
+          }
+          out.innerHTML = html;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      });
+
+      // ============= Apps Revocation Helper =============
+      const openTab = (url) => chrome.tabs.create({ url });
+      document.getElementById('btn-revoke-ig').addEventListener('click', () =>
+        openTab('https://www.instagram.com/accounts/manage_access/'));
+      document.getElementById('btn-revoke-x').addEventListener('click', () =>
+        openTab('https://x.com/settings/connected_apps'));
+      document.getElementById('btn-revoke-google').addEventListener('click', () =>
+        openTab('https://myaccount.google.com/connections'));
+      document.getElementById('btn-revoke-fb').addEventListener('click', () =>
+        openTab('https://www.facebook.com/settings/?tab=business_tools'));
+      document.getElementById('btn-revoke-github').addEventListener('click', () =>
+        openTab('https://github.com/settings/applications'));
+
       // Password Pwned check (via service worker, k-anonymity)
       document.getElementById('btn-tool-pwd-check').addEventListener('click', async () => {
         const password = document.getElementById('tool-pwd-input').value;
@@ -1468,6 +1568,29 @@
     _escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, c =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    },
+
+    async _renderReverseSearchHint(report) {
+      try {
+        const history = await SocialShieldStorage.getProfileHistory(report.platform, report.username);
+        if (!history || history.length === 0) return;
+        const latest = history[history.length - 1];
+        if (!latest.profilePicUrl) return;
+        const u = encodeURIComponent(latest.profilePicUrl);
+        // Append vào title bar hint
+        const titleEl = document.getElementById('doxxing-detail-title');
+        if (!titleEl) return;
+        const hintId = 'doxxing-revsearch-hint';
+        document.getElementById(hintId)?.remove();
+        const hint = document.createElement('div');
+        hint.id = hintId;
+        hint.style.cssText = 'font-size: 11px; margin-top: 4px; color: var(--text-secondary);';
+        hint.innerHTML = `Reverse search profile pic: ` +
+          `<a href="https://lens.google.com/uploadbyurl?url=${u}" target="_blank" style="color: var(--accent);">Google Lens</a> · ` +
+          `<a href="https://yandex.com/images/search?rpt=imageview&url=${u}" target="_blank" style="color: var(--accent);">Yandex</a> · ` +
+          `<a href="https://tineye.com/search/?url=${u}" target="_blank" style="color: var(--accent);">TinEye</a>`;
+        titleEl.parentElement?.appendChild(hint);
+      } catch {}
     },
 
     async _loadFootprintMonitorSettings() {
@@ -1526,6 +1649,9 @@
       const body = document.getElementById('doxxing-detail-body');
 
       title.textContent = `@${r.username} — ${r.platform.toUpperCase()}`;
+
+      // Suggest reverse image search nếu có profile pic URL trong storage
+      this._renderReverseSearchHint(r);
 
       const tierColor = r.riskTier === 'critical' ? 'var(--danger)'
                      : r.riskTier === 'high' ? 'orange'

@@ -251,7 +251,10 @@ Open Dashboard → tab **Tools**:
 - **Text PII Scanner** — paste bất kỳ text (bio, message, file...)
 - **Email Breach Check** — input email
 - **Password Pwned Check** — input password (k-anonymity, không lưu)
-- **Image Privacy Scanner** — chọn file ảnh, quét EXIF GPS + VietQR + CCCD heuristic + OCR opt-in
+- **Image Privacy Scanner** — chọn file ảnh, quét EXIF GPS + VietQR + CCCD heuristic, **+ Generate safe version** (strip EXIF + cover QR)
+- **Reverse Image Search** — paste URL ảnh → mở Google Lens / Yandex / TinEye / Bing
+- **Geo Pattern Heatmap** — input IG username → cluster locations từ recent posts + cảnh báo "nơi sống"
+- **Connected Apps Revocation** — deep-links tới settings page của 5 platform lớn
 - **Footprint Monitor** — config danh sách username + interval cho background monitoring
 - **Privacy Audit Viewer** — xem report mới nhất từ FAB IG/X audit
 
@@ -350,13 +353,50 @@ Output: Privacy Posture score 0-100 + findings categorized (visibility/tracking/
 
 ---
 
+### 15. Perceptual Hash (aHash) Cross-Platform Match
+- `computeAHash(image)` — resize 8×8 grayscale → 64-bit bitstring
+- Hamming distance threshold: 0 = identical, ≤8 = "very likely same image"
+- Tự động compute khi `saveProfileSnapshot` chạy trên IG/X — lưu vào snapshot history
+- `detectCrossPlatformLinkage` thêm 2 signal mới: `identical_profile_pic_hash` (+70), `similar_profile_pic_hash` (+50). Đây là bằng chứng mạnh nhất xác định cùng 1 người dù URL khác nhau (CDN khác).
+
+### 16. Reverse Image Search Shortcuts
+- Tools card: paste URL ảnh → 4 button mở **Google Lens / Yandex / TinEye / Bing**
+- Ngay trong Doxxing Report detail: hiển thị link reverse search profile pic của target
+- Yandex thường tốt nhất cho face match (kinh nghiệm OSINT)
+
+### 17. Geo Pattern Heatmap
+- Tools card: input username (đã quét trên IG) → fetch `recentPosts` từ background, cluster theo `location.name`
+- Bảng ranked: location + count + link Google Maps
+- Cảnh báo nếu 1 location ≥3 lần (= "nơi sống/làm việc" → stalking risk)
+
+### 18. Safe Image Generator (PoC PII auto-blur)
+- Tools card: button **"Generate safe version"** trên image scanner
+- Workflow:
+  - Re-encode JPEG qua Canvas → tự động strip toàn bộ EXIF (GPS, camera, datetime)
+  - Detect QR code (jsQR) → vẽ rectangle đen che + stamp "[QR removed]"
+  - CCCD heuristic: chỉ cảnh báo, KHÔNG tự crop (để user tự quyết định)
+  - Output: download link + preview ảnh đã clean
+
+### 19. Connected Apps Revocation Helper
+- Tools card với 5 deep-link buttons:
+  - 📷 IG manage access — `/accounts/manage_access/`
+  - 🐦 X connected apps — `/settings/connected_apps`
+  - 🔑 Google 3rd-party — `myaccount.google.com/connections`
+  - 👤 Facebook business integrations
+  - 🐙 GitHub authorized apps
+- Quick checklist: revoke nếu app không dùng >6 tháng / scope quá rộng / không nhận ra tên / developer đã shut down
+- Extension không tự revoke (cần user click) nhưng deep-link rút ngắn workflow
+
+---
+
 ## Roadmap
 
-- [ ] pHash profile pic so cross-platform (cùng ảnh = same person)
-- [ ] Reverse image search shortcut (Google Lens / Yandex / TinEye buttons)
-- [ ] Geo-pattern map từ multiple posts (heatmap)
-- [ ] Auto-blur PII trên ảnh trước khi post (PoC)
-- [ ] Mass apps revocation helper
+(Tất cả features ban đầu đã ship — đề xuất hướng phát triển tiếp:)
+- [ ] pHash thay aHash (DCT-based, tolerant với rotate/crop nhỏ)
+- [ ] Real heatmap với Leaflet local (no CDN, ~40KB)
+- [ ] Auto-detect text region trong ảnh để blur (cần lightweight ML)
+- [ ] Revocation count parser cho IG/X/GitHub apps page (qua content script)
+- [ ] Background pHash diff: alert khi profile pic giống ai đó nổi tiếng (impersonation từ phía mình)
 
 ---
 

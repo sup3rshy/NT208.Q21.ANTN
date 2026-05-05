@@ -261,10 +261,21 @@
           try {
             const userInfo = await this.fetchUserInfo(profile);
             if (userInfo) {
+              // aHash của profile pic — dùng cho cross-platform linkage detection
+              let profilePicHash = null;
+              if (userInfo.profile_image_url_https) {
+                try {
+                  // Twitter trả normal_400x400 — dùng full size để hash chính xác hơn
+                  const fullPic = userInfo.profile_image_url_https.replace(/_normal\.(jpe?g|png)/i, '.$1');
+                  profilePicHash = await SocialShieldImageAnalyzer.computeAHash(fullPic);
+                } catch (e) { /* CORS/load fail — ignore */ }
+              }
+
               const { entry, changes } = await SocialShieldStorage.saveProfileSnapshot('twitter', profile, {
                 displayName: userInfo.name || '',
                 bio: userInfo.description || '',
                 profilePicUrl: userInfo.profile_image_url_https || '',
+                profilePicHash,
                 externalUrl: userInfo.url || userInfo.entities?.url?.urls?.[0]?.expanded_url || '',
                 isPrivate: !!userInfo.protected,
                 isVerified: !!userInfo.verified || !!userInfo.is_blue_verified,
@@ -709,9 +720,11 @@
           const igLatest = igHistory[igHistory.length - 1];
           linkage = SocialShieldScanner.detectCrossPlatformLinkage([
             { platform: 'twitter', username: profile, displayName: twDisplayName,
-              bio: bioText, externalUrl: profileData.externalUrl },
+              bio: bioText, externalUrl: profileData.externalUrl,
+              profilePicHash: null /* sẽ được set khi profile snapshot lưu lần sau */ },
             { platform: 'instagram', username: profile, displayName: igLatest.displayName,
               bio: igLatest.bio, profilePicUrl: igLatest.profilePicUrl,
+              profilePicHash: igLatest.profilePicHash,
               externalUrl: igLatest.externalUrl },
           ]);
         }

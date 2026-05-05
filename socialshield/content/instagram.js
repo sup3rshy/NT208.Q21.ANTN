@@ -292,10 +292,19 @@
               type: 'FETCH_PROFILE_INFO', username: profile
             });
             if (profileInfo) {
+              // Compute aHash của profile pic để cross-platform linkage so sánh
+              let profilePicHash = null;
+              if (profileInfo.profilePicUrl) {
+                try {
+                  profilePicHash = await SocialShieldImageAnalyzer.computeAHash(profileInfo.profilePicUrl);
+                } catch (e) { /* CORS hoặc image load fail — ignore */ }
+              }
+
               const { entry, changes } = await SocialShieldStorage.saveProfileSnapshot('instagram', profile, {
                 displayName: profileInfo.fullName || '',
                 bio: profileInfo.bio || '',
                 profilePicUrl: profileInfo.profilePicUrl || '',
+                profilePicHash,
                 externalUrl: profileInfo.externalUrl || '',
                 isPrivate: !!profileInfo.isPrivate,
                 isVerified: !!profileInfo.isVerified,
@@ -746,12 +755,21 @@
         const twHistory = await SocialShieldStorage.getProfileHistory('twitter', profile);
         if (twHistory && twHistory.length > 0) {
           const twLatest = twHistory[twHistory.length - 1];
+          // Compute IG hash on-the-fly từ profile pic hiện tại
+          let igHash = null;
+          try {
+            if (profileData.profilePicUrl) {
+              igHash = await SocialShieldImageAnalyzer.computeAHash(profileData.profilePicUrl);
+            }
+          } catch {}
           linkage = SocialShieldScanner.detectCrossPlatformLinkage([
             { platform: 'instagram', username: profile, displayName,
               bio: bioText, profilePicUrl: profileData.profilePicUrl,
+              profilePicHash: igHash,
               externalUrl: profileData.externalUrl },
             { platform: 'twitter', username: profile, displayName: twLatest.displayName,
               bio: twLatest.bio, profilePicUrl: twLatest.profilePicUrl,
+              profilePicHash: twLatest.profilePicHash,
               externalUrl: twLatest.externalUrl },
           ]);
         }

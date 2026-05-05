@@ -392,6 +392,159 @@ const SocialShieldImageAnalyzer = {
     );
   },
 
+  // ==================== 5. Perceptual Hash (aHash 8x8) ====================
+
+  /**
+   * Tính aHash 64-bit từ ảnh. Đơn giản hơn pHash (DCT) nhưng đủ để
+   * phát hiện "cùng ảnh" qua các CDN/platform khác nhau.
+   * Workflow: resize 8x8 → grayscale → so với mean → bitstring 64.
+   *
+   * @param {HTMLImageElement|HTMLCanvasElement|Blob|string} input
+   * @returns {Promise<string>} 64-character binary string
+   */
+  async computeAHash(input) {
+    let img;
+    if (typeof input === 'string') {
+      img = await this._urlToImage(input);
+    } else if (input instanceof Blob) {
+      img = await this._blobToImage(input);
+    } else if (input instanceof HTMLImageElement || input instanceof HTMLCanvasElement) {
+      img = input;
+    } else {
+      throw new Error('Invalid input for computeAHash');
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 8;
+    canvas.height = 8;
+    const ctx = canvas.getContext('2d');
+    // Vẽ ảnh rescale xuống 8x8 (smoothing imageSmoothingEnabled mặc định true)
+    ctx.drawImage(img, 0, 0, 8, 8);
+    const data = ctx.getImageData(0, 0, 8, 8).data;
+
+    const grays = new Array(64);
+    let sum = 0;
+    for (let i = 0; i < 64; i++) {
+      const o = i * 4;
+      // Luminance ITU-R BT.709
+      const g = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2];
+      grays[i] = g;
+      sum += g;
+    }
+    const avg = sum / 64;
+    let hash = '';
+    for (let i = 0; i < 64; i++) hash += grays[i] >= avg ? '1' : '0';
+    return hash;
+  },
+
+  /**
+   * Hamming distance giữa 2 hash bitstring.
+   * @returns {number} 0-64. <=8 = likely cùng 1 ảnh.
+   */
+  hashDistance(h1, h2) {
+    if (!h1 || !h2 || h1.length !== h2.length) return -1;
+    let d = 0;
+    for (let i = 0; i < h1.length; i++) if (h1[i] !== h2[i]) d++;
+    return d;
+  },
+
+  /**
+   * @returns {Object} { distance, similar, identical, similarity: 0-1 }
+   */
+  compareHashes(h1, h2) {
+    const d = this.hashDistance(h1, h2);
+    if (d < 0) return { distance: -1, similar: false, identical: false, similarity: 0 };
+    return {
+      distance: d,
+      identical: d === 0,
+      similar: d <= 8,    // ngưỡng kinh nghiệm cho aHash 64-bit
+      similarity: 1 - d / 64,
+    };
+  },
+
+  // ==================== 6. Safe Image Generator (PoC PII auto-blur) ====================
+
+  /**
+   * Sinh "phiên bản an toàn" của ảnh:
+   *  - Strip toàn bộ EXIF (re-encode JPEG qua Canvas tự động loại metadata)
+   *  - Che QR code nếu có (vẽ rectangle đen lên vùng QR)
+   *  - Cảnh báo nếu phát hiện CCCD nhưng KHÔNG tự crop (để user quyết định)
+   *
+   * @param {Blob|HTMLImageElement} input
+   * @param {Object} options - { blurQR: bool, jpegQuality: 0.85 }
+   * @returns {Promise<{blob, info}>}
+   */
+  async generateSafeImage(input, options = {}) {
+    const { blurQR = true, jpegQuality = 0.85 } = options;
+
+    let img;
+    if (input instanceof Blob) img = await this._blobToImage(input);
+    else if (input instanceof HTMLImageElement) img = input;
+    else throw new Error('Invalid input for generateSafeImage');
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    const info = { exifStripped: true, qrCovered: false, idCardWarning: false };
+
+    // QR detect & cover
+    if (blurQR && (await this.loadJsQR().catch(() => false))) {
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+      if (code && code.location) {
+        const corners = [
+          code.location.topLeftCorner,
+          code.location.topRightCorner,
+          code.location.bottomRightCorner,
+          code.location.bottomLeftCorner,
+        ];
+        const xs = corners.map(c => c.x);
+        const ys = corners.map(c => c.y);
+        const x0 = Math.max(0, Math.min(...xs) - 8);
+        const y0 = Math.max(0, Math.min(...ys) - 8);
+        const x1 = Math.min(canvas.width, Math.max(...xs) + 8);
+        const y1 = Math.min(canvas.height, Math.max(...ys) + 8);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        // Stamp warning text
+        ctx.fillStyle = '#fff';
+        ctx.font = `${Math.max(12, (x1 - x0) / 12)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText('[QR removed]', (x0 + x1) / 2, (y0 + y1) / 2);
+        info.qrCovered = true;
+        info.qrData = code.data?.substring(0, 100);
+      }
+    }
+
+    // Check ID card heuristic → warn (không tự crop)
+    const idCheck = this.detectVNIDCard(img);
+    if (idCheck.likelyIdCard) {
+      info.idCardWarning = true;
+      info.idCardConfidence = idCheck.confidence;
+    }
+
+    // Re-encode → mất EXIF
+    const blob = await new Promise(resolve =>
+      canvas.toBlob(resolve, 'image/jpeg', jpegQuality)
+    );
+    return { blob, info };
+  },
+
+  // ==================== Helpers ====================
+
+  _urlToImage(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(`failed to load image: ${url}`));
+      img.src = url;
+    });
+  },
+
   // ==================== Convenience: scan an image URL/blob with all checks ====================
 
   /**
