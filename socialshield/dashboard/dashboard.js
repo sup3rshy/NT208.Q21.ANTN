@@ -75,6 +75,8 @@
         case 'alerts': this.loadAlerts(); break;
         case 'settings': this.loadSettings(); break;
         case 'security': this.loadSecurityScore(); break;
+        case 'tools': this.initToolsPage(); break;
+        case 'doxxing': this.loadDoxxingReports(); break;
         case 'about': break; // Static page, no data loading needed
       }
     },
@@ -1161,9 +1163,279 @@
       this.loadOverview();
     },
 
+    // ==================== Tools Page (standalone) ====================
+
+    initToolsPage() {
+      // Tránh bind nhiều lần
+      if (this._toolsBound) return;
+      this._toolsBound = true;
+
+      // Username Footprint
+      document.getElementById('btn-tool-footprint').addEventListener('click', async () => {
+        const username = document.getElementById('tool-footprint-username').value.trim();
+        const out = document.getElementById('tool-footprint-result');
+        if (!username) { out.innerHTML = '<div style="color:var(--danger);">Enter a username</div>'; return; }
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Scanning...</div>';
+        try {
+          const result = await SocialShieldScanner.scanUsernameFootprint(username);
+          if (!result || result.error) {
+            out.innerHTML = `<div style="color:var(--danger);">Error: ${result?.error || 'unknown'}</div>`;
+            return;
+          }
+          let html = `<div style="margin-bottom: 12px; font-weight: 600; color: var(--accent);">${result.summary}</div>`;
+          html += '<table style="width:100%; border-collapse: collapse;">';
+          html += '<thead><tr style="border-bottom: 1px solid var(--border);"><th style="text-align:left;padding:6px;">Site</th><th style="text-align:left;padding:6px;">Status</th><th style="text-align:left;padding:6px;">Profile</th></tr></thead><tbody>';
+          for (const r of result.found) {
+            html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: var(--danger);">✓ Found</td><td style="padding:6px;"><a href="${r.profileUrl}" target="_blank" style="color: var(--accent);">${r.profileUrl}</a></td></tr>`;
+          }
+          for (const r of result.notFound) {
+            html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: var(--text-secondary);">✗ Not found</td><td style="padding:6px;">—</td></tr>`;
+          }
+          for (const r of result.errors) {
+            html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: orange;">⚠ ${r.error}</td><td style="padding:6px;">—</td></tr>`;
+          }
+          html += '</tbody></table>';
+          if (result.found.length >= 3) {
+            html += `<div style="margin-top: 12px; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 6px; font-size: 13px;">⚠️ Username "${result.username}" được tái sử dụng ở ${result.found.length} site khác nhau — cao rủi ro linkability. Khuyến nghị: dùng username khác cho dịch vụ nhạy cảm.</div>`;
+          }
+          out.innerHTML = html;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${err.message}</div>`;
+        }
+      });
+
+      // URL Safety check
+      document.getElementById('btn-tool-url-check').addEventListener('click', async () => {
+        const url = document.getElementById('tool-url-input').value.trim();
+        const out = document.getElementById('tool-url-result');
+        if (!url) { out.innerHTML = '<div style="color:var(--danger);">Enter a URL</div>'; return; }
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Checking...</div>';
+        try {
+          const settings = await SocialShieldStorage.getSettings();
+          const opts = {};
+          if (settings.safeBrowsingEnabled && settings.safeBrowsingApiKey) opts.safeBrowsingApiKey = settings.safeBrowsingApiKey;
+          if (settings.virusTotalEnabled && settings.virusTotalApiKey) opts.virusTotalApiKey = settings.virusTotalApiKey;
+          if (settings.urlhausEnabled && settings.urlhausAuthKey) opts.urlhausAuthKey = settings.urlhausAuthKey;
+
+          const result = await SocialShieldScanner.checkLinkFull(url, opts);
+          const color = result.safe ? 'var(--accent)' : 'var(--danger)';
+          const verdict = result.safe ? '✓ Appears safe' : '✗ UNSAFE';
+          let html = `<div style="font-size: 18px; font-weight: 600; color: ${color}; margin-bottom: 8px;">${verdict} (score: ${result.score}/100)</div>`;
+          const checks = [];
+          if (result.safeBrowsingChecked) checks.push('Google Safe Browsing');
+          if (result.virusTotalChecked) checks.push(`VirusTotal (${result.virusTotalStats?.malicious || 0}/${result.virusTotalStats?.total || 0} malicious)`);
+          if (result.urlhausChecked) checks.push('URLhaus');
+          if (checks.length) html += `<div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Engines: ${checks.join(' • ')}</div>`;
+
+          if (result.warnings && result.warnings.length > 0) {
+            html += '<ul style="margin: 0; padding-left: 18px;">';
+            for (const w of result.warnings) {
+              const sevColor = w.severity === 'critical' ? 'var(--danger)'
+                            : w.severity === 'high' ? 'orange' : 'var(--text-secondary)';
+              html += `<li style="color: ${sevColor}; margin-bottom: 4px;"><b>[${w.severity}]</b> ${w.message}</li>`;
+            }
+            html += '</ul>';
+          } else {
+            html += '<div style="color: var(--accent);">No warnings.</div>';
+          }
+          out.innerHTML = html;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${err.message}</div>`;
+        }
+      });
+
+      // Text PII scanner
+      document.getElementById('btn-tool-text-scan').addEventListener('click', () => {
+        const text = document.getElementById('tool-text-input').value;
+        const out = document.getElementById('tool-text-result');
+        if (!text) { out.innerHTML = '<div style="color:var(--danger);">Paste some text first</div>'; return; }
+        const findings = [
+          ...SocialShieldScanner.scanPrivacy(text),
+          ...SocialShieldScanner.checkPasswordExposure(text),
+        ];
+        if (findings.length === 0) {
+          out.innerHTML = '<div style="color: var(--accent); font-weight: 600;">✓ No PII detected.</div>';
+          return;
+        }
+        let html = `<div style="font-weight: 600; margin-bottom: 12px;">Found ${findings.length} issue(s):</div>`;
+        for (const f of findings) {
+          const sevColor = f.severity === 'critical' ? 'var(--danger)'
+                        : f.severity === 'high' ? 'orange'
+                        : f.severity === 'medium' ? '#fbbf24' : 'var(--text-secondary)';
+          html += `<div style="padding: 10px; margin-bottom: 8px; background: rgba(255,255,255,0.04); border-left: 3px solid ${sevColor}; border-radius: 4px;">`;
+          html += `<div style="font-weight: 600;">${f.icon || '⚠'} ${f.title} <span style="font-size: 11px; color: ${sevColor};">[${f.severity}]</span></div>`;
+          html += `<div style="font-size: 13px; color: var(--text-secondary); margin: 4px 0;">${f.message}</div>`;
+          if (f.values && f.values.length) {
+            html += `<div style="font-size: 12px; font-family: monospace; color: var(--accent);">${f.values.slice(0, 5).map(v => this._escapeHtml(String(v))).join(', ')}${f.values.length > 5 ? ` +${f.values.length - 5} more` : ''}</div>`;
+          }
+          html += '</div>';
+        }
+        out.innerHTML = html;
+      });
+      document.getElementById('btn-tool-text-clear').addEventListener('click', () => {
+        document.getElementById('tool-text-input').value = '';
+        document.getElementById('tool-text-result').innerHTML = '';
+      });
+
+      // Email Breach check
+      document.getElementById('btn-tool-email-check').addEventListener('click', async () => {
+        const email = document.getElementById('tool-email-input').value.trim();
+        const out = document.getElementById('tool-email-result');
+        if (!email || !/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+          out.innerHTML = '<div style="color:var(--danger);">Enter a valid email</div>'; return;
+        }
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Checking...</div>';
+        try {
+          const result = await chrome.runtime.sendMessage({ type: 'CHECK_EMAIL_BREACH', email });
+          if (!result) { out.innerHTML = '<div style="color: orange;">Could not check.</div>'; return; }
+          if (result.breached) {
+            const list = (result.breaches || []).filter(b => b && !String(b).startsWith('Domain'));
+            let html = `<div style="font-size: 18px; font-weight: 600; color: var(--danger); margin-bottom: 8px;">💀 Breached in ${result.breachCount > 0 ? result.breachCount : 'multiple'} dataset(s)</div>`;
+            html += `<div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">Source: ${result.source}</div>`;
+            if (list.length) html += `<div style="font-size: 13px;"><b>Breaches:</b> ${list.slice(0, 20).join(', ')}${list.length > 20 ? ` +${list.length - 20} more` : ''}</div>`;
+            html += '<div style="margin-top: 10px; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 6px; font-size: 13px;">⚠ Đổi password ngay trên các service liên quan và bật 2FA.</div>';
+            out.innerHTML = html;
+          } else if (result.note) {
+            out.innerHTML = `<div style="color: orange;">⚠ ${result.note}</div>`;
+          } else {
+            out.innerHTML = '<div style="color: var(--accent); font-weight: 600;">✓ No known breaches.</div>';
+          }
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${err.message}</div>`;
+        }
+      });
+
+      // Password Pwned check (via service worker, k-anonymity)
+      document.getElementById('btn-tool-pwd-check').addEventListener('click', async () => {
+        const password = document.getElementById('tool-pwd-input').value;
+        const out = document.getElementById('tool-pwd-result');
+        if (!password || password.length < 4) {
+          out.innerHTML = '<div style="color:var(--danger);">Password too short</div>'; return;
+        }
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Checking via HIBP k-anonymity...</div>';
+        try {
+          const result = await chrome.runtime.sendMessage({ type: 'CHECK_PASSWORD_PWNED', password });
+          if (result && result.pwned) {
+            out.innerHTML = `<div style="font-size: 18px; font-weight: 600; color: var(--danger);">💀 PWNED — seen ${result.count.toLocaleString()} time(s) in breaches</div><div style="margin-top: 8px; font-size: 13px;">Don't use this password anywhere. Generate a strong unique one.</div>`;
+          } else {
+            out.innerHTML = '<div style="color: var(--accent); font-weight: 600;">✓ Not found in HIBP database.</div><div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Note: still ensure it\'s strong and unique.</div>';
+          }
+          // Clear input để không lưu
+          document.getElementById('tool-pwd-input').value = '';
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${err.message}</div>`;
+        }
+      });
+    },
+
+    _escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    },
+
+    // ==================== Doxxing Risk Page ====================
+
+    async loadDoxxingReports() {
+      const list = document.getElementById('doxxing-list');
+      const all = await SocialShieldStorage.getAll();
+      const reports = [];
+      for (const [key, value] of Object.entries(all)) {
+        if (key.startsWith('doxxing_') && value && value.riskTier) {
+          reports.push({ key, ...value });
+        }
+      }
+
+      if (reports.length === 0) {
+        list.innerHTML = '<div class="ss-empty-state"><div class="ss-empty-icon">🎯</div><p>Chưa có report. Chạy Privacy Scan trên Instagram hoặc X profile để generate.</p></div>';
+        return;
+      }
+
+      reports.sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0));
+      let html = '';
+      for (const r of reports) {
+        const tierColor = r.riskTier === 'critical' ? 'var(--danger)'
+                       : r.riskTier === 'high' ? 'orange'
+                       : r.riskTier === 'medium' ? '#fbbf24' : 'var(--accent)';
+        html += `<div class="ss-doxxing-row" data-key="${r.key}" style="display:flex; justify-content:space-between; align-items:center; padding: 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; cursor: pointer;">`;
+        html += `<div><div style="font-weight: 600;">@${r.username} <span style="font-size: 11px; color: var(--text-secondary);">(${r.platform})</span></div><div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">${r.attackerKnows?.length || 0} facts • ${r.attackerCanDo?.length || 0} attack vectors</div></div>`;
+        html += `<div style="text-align: right;"><div style="font-size: 22px; font-weight: 700; color: ${tierColor};">${r.riskScore}</div><div style="font-size: 11px; color: ${tierColor}; text-transform: uppercase;">${r.riskTier}</div></div>`;
+        html += `</div>`;
+      }
+      list.innerHTML = html;
+
+      // Click to view detail
+      list.querySelectorAll('.ss-doxxing-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const key = row.getAttribute('data-key');
+          const r = reports.find(x => x.key === key);
+          this.renderDoxxingDetail(r);
+        });
+      });
+    },
+
+    renderDoxxingDetail(r) {
+      const card = document.getElementById('doxxing-detail-card');
+      const title = document.getElementById('doxxing-detail-title');
+      const body = document.getElementById('doxxing-detail-body');
+
+      title.textContent = `@${r.username} — ${r.platform.toUpperCase()}`;
+
+      const tierColor = r.riskTier === 'critical' ? 'var(--danger)'
+                     : r.riskTier === 'high' ? 'orange'
+                     : r.riskTier === 'medium' ? '#fbbf24' : 'var(--accent)';
+
+      let html = `<div style="display:flex; align-items: baseline; gap: 16px; margin-bottom: 16px;">`;
+      html += `<div style="font-size: 48px; font-weight: 700; color: ${tierColor};">${r.riskScore}<span style="font-size: 20px;">/100</span></div>`;
+      html += `<div><div style="font-size: 14px; text-transform: uppercase; color: ${tierColor}; font-weight: 600;">${r.riskTier} risk</div><div style="font-size: 12px; color: var(--text-secondary);">Generated ${new Date(r.generatedAt).toLocaleString()}</div></div>`;
+      html += `</div>`;
+
+      html += `<div style="padding: 14px; background: rgba(255,255,255,0.04); border-left: 3px solid ${tierColor}; border-radius: 4px; margin-bottom: 16px; line-height: 1.6;">${this._escapeHtml(r.narrative).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</div>`;
+
+      // Attacker knows
+      if (r.attackerKnows?.length > 0) {
+        html += '<h3 style="margin: 16px 0 8px;">🕵️ Attacker biết được:</h3>';
+        html += '<ul style="margin: 0; padding-left: 20px;">';
+        for (const k of r.attackerKnows) {
+          html += `<li style="margin-bottom: 6px;"><b>[${k.category}]</b> ${this._escapeHtml(k.fact).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')} <span style="font-size: 11px; color: var(--text-secondary);">— ${k.source}</span></li>`;
+        }
+        html += '</ul>';
+      }
+
+      // Attacker can do
+      if (r.attackerCanDo?.length > 0) {
+        html += '<h3 style="margin: 16px 0 8px;">⚔️ Hướng tấn công khả thi:</h3>';
+        html += '<ul style="margin: 0; padding-left: 20px;">';
+        for (const a of r.attackerCanDo) {
+          html += `<li style="margin-bottom: 4px; color: var(--text);">${this._escapeHtml(a)}</li>`;
+        }
+        html += '</ul>';
+      }
+
+      // Fix actions
+      if (r.fixActions?.length > 0) {
+        html += '<h3 style="margin: 16px 0 8px;">🛡️ Bạn cần làm:</h3>';
+        for (const f of r.fixActions) {
+          const pColor = f.priority === 'critical' ? 'var(--danger)'
+                      : f.priority === 'high' ? 'orange'
+                      : f.priority === 'medium' ? '#fbbf24' : 'var(--accent)';
+          html += `<div style="padding: 10px; margin-bottom: 6px; background: rgba(255,255,255,0.04); border-left: 3px solid ${pColor}; border-radius: 4px;"><span style="font-size: 11px; color: ${pColor}; text-transform: uppercase; font-weight: 600;">[${f.priority}]</span> ${this._escapeHtml(f.action)}</div>`;
+        }
+      }
+
+      body.innerHTML = html;
+      card.style.display = 'block';
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+
     // ==================== Event Binding ====================
 
     bindActions() {
+      // Doxxing close + refresh
+      document.getElementById('btn-doxxing-close').addEventListener('click', () => {
+        document.getElementById('doxxing-detail-card').style.display = 'none';
+      });
+      document.getElementById('btn-doxxing-refresh').addEventListener('click', () => this.loadDoxxingReports());
+
       // Compare button
       document.getElementById('btn-compare').addEventListener('click', () => this.runCompare());
 

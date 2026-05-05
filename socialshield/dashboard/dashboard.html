@@ -39,6 +39,14 @@
           <span class="ss-nav-icon">🛡️</span>
           <span>Security Score</span>
         </a>
+        <a class="ss-nav-item" data-page="tools" href="#">
+          <span class="ss-nav-icon">🧰</span>
+          <span>Tools</span>
+        </a>
+        <a class="ss-nav-item" data-page="doxxing" href="#">
+          <span class="ss-nav-icon">🎯</span>
+          <span>Doxxing Risk</span>
+        </a>
         <a class="ss-nav-item" data-page="alerts" href="#">
           <span class="ss-nav-icon">🔔</span>
           <span>Alerts</span>
@@ -268,6 +276,114 @@
         <div style="padding: 16px; display: flex; gap: 8px;">
           <button class="ss-btn ss-btn-primary" id="btn-export-report" style="flex:1;">Export Security Report (CSV)</button>
           <button class="ss-btn" id="btn-export-report-json" style="flex:1;">Export Full Data (JSON)</button>
+        </div>
+      </div>
+
+      <!-- Tools Page (standalone — không cần ở IG/X) -->
+      <div class="ss-page" id="page-tools">
+        <div class="ss-page-header">
+          <h1>Tools</h1>
+          <p class="ss-page-desc">Standalone scanners — chạy được mà không cần mở Instagram/X</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🌐 Username Footprint</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Quét username trên 9+ site lớn (GitHub, Reddit, GitLab, HN, dev.to, npm, ...) xem có account nào không.
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" class="ss-input" id="tool-footprint-username" placeholder="Username (vd: torvalds)" style="flex: 1;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-footprint">Scan</button>
+            </div>
+            <div id="tool-footprint-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🔗 URL Safety Check</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Heuristic + Google Safe Browsing + VirusTotal + URLhaus (theo cài đặt API key trong Settings).
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" class="ss-input" id="tool-url-input" placeholder="https://..." style="flex: 1;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-url-check">Check</button>
+            </div>
+            <div id="tool-url-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🔍 Text PII Scanner</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Paste bất kỳ text nào (bio, caption, message...) để quét PII: email, SĐT, CCCD, thẻ tín dụng, biển số, mã sinh viên, MoMo handle, ...
+            </p>
+            <textarea class="ss-input" id="tool-text-input" rows="5" placeholder="Paste text here..." style="width: 100%; resize: vertical;"></textarea>
+            <div style="display: flex; gap: 8px; margin: 12px 0;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-text-scan">Scan</button>
+              <button class="ss-btn" id="btn-tool-text-clear">Clear</button>
+            </div>
+            <div id="tool-text-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>💀 Email Breach Check</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Kiểm tra email có nằm trong data breach không (XposedOrNot → HackCheck). Free, không cần API key.
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="email" class="ss-input" id="tool-email-input" placeholder="user@example.com" style="flex: 1;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-email-check">Check</button>
+            </div>
+            <div id="tool-email-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🔐 Password Pwned Check</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Privacy-preserving: chỉ 5 ký tự đầu của SHA-1 hash được gửi (HIBP k-anonymity). Password không bao giờ rời máy bạn.
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="password" class="ss-input" id="tool-pwd-input" placeholder="Enter password to check" style="flex: 1;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-pwd-check">Check</button>
+            </div>
+            <div id="tool-pwd-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Doxxing Risk Page -->
+      <div class="ss-page" id="page-doxxing">
+        <div class="ss-page-header">
+          <h1>🎯 Doxxing Risk Reports</h1>
+          <p class="ss-page-desc">Báo cáo tổng hợp: attacker biết gì, làm được gì, bạn cần fix gì.</p>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Saved Reports</h2>
+            <button class="ss-btn ss-btn-sm" id="btn-doxxing-refresh">Refresh</button>
+          </div>
+          <div class="ss-card-body" id="doxxing-list">
+            <div class="ss-empty-state">
+              <div class="ss-empty-icon">🎯</div>
+              <p>Chưa có report. Chạy Privacy Scan trên Instagram hoặc X profile để generate.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ss-card" id="doxxing-detail-card" style="display: none;">
+          <div class="ss-card-header">
+            <h2 id="doxxing-detail-title">Report Detail</h2>
+            <button class="ss-btn ss-btn-sm" id="btn-doxxing-close">✕ Close</button>
+          </div>
+          <div class="ss-card-body" id="doxxing-detail-body"></div>
         </div>
       </div>
 

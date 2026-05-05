@@ -539,7 +539,26 @@
         bioText = main.innerText.substring(0, 5000);
       }
 
-      const findings = SocialShieldScanner.scanPrivacy(bioText);
+      // Lấy display name từ DOM (Twitter ko expose recent tweets dễ qua API)
+      let twDisplayName = '';
+      const nameEl = document.querySelector('[data-testid="UserName"]');
+      if (nameEl) {
+        twDisplayName = (nameEl.innerText || '').split('\n')[0] || '';
+      }
+
+      // Deep scan bio + display name (Twitter API public ko trả captions, ưu tiên DOM scrape)
+      // Bonus: scrape một số tweet visible trên timeline làm caption
+      const tweetTextEls = document.querySelectorAll('[data-testid="tweetText"]');
+      const recentCaptions = [];
+      tweetTextEls.forEach((el, i) => {
+        if (i < 10) recentCaptions.push(el.innerText || '');
+      });
+
+      const findings = SocialShieldScanner.scanFullProfile({
+        bio: bioText,
+        displayName: twDisplayName,
+        captions: recentCaptions,
+      });
 
       // AI Text Analysis - phân tích bio có dấu hiệu scam/phishing không
       try {
@@ -604,7 +623,7 @@
       if (pwdFindings.length > 0) {
         findings.push(...pwdFindings);
         const pwdPatterns = [
-          /(?:password|pass|mật khẩu|mk|pw)[:\s=]+['"]?([^\s'"]{4,30})['"]?/gi,
+          /\b(?:password|passwd|mật\s*khẩu)\s*[:=]\s*['"]?([A-Za-z0-9!@#$%^&*()_+\-={}\[\]|:;<>,.?/~`]{6,30})['"]?/gi,
           /(?:pin|mã pin)[:\s=]+(\d{4,8})/gi,
         ];
         for (const pattern of pwdPatterns) {
@@ -674,8 +693,39 @@
       );
       analysis.recommendations = recommendations;
 
+      // Cross-platform linkage: pull instagram profile if exists
+      let linkage = null;
+      try {
+        const igHistory = await SocialShieldStorage.getProfileHistory('instagram', profile);
+        if (igHistory && igHistory.length > 0) {
+          const igLatest = igHistory[igHistory.length - 1];
+          linkage = SocialShieldScanner.detectCrossPlatformLinkage([
+            { platform: 'twitter', username: profile, displayName: twDisplayName,
+              bio: bioText, externalUrl: profileData.externalUrl },
+            { platform: 'instagram', username: profile, displayName: igLatest.displayName,
+              bio: igLatest.bio, profilePicUrl: igLatest.profilePicUrl,
+              externalUrl: igLatest.externalUrl },
+          ]);
+        }
+      } catch { /* ignore */ }
+
+      // Doxxing Report
+      const breachData = findings.filter(f => f.type === 'email_breach');
+      const doxxing = SocialShieldScanner.generateDoxxingReport({
+        profile: { username: profile, displayName: twDisplayName },
+        privacyFindings: analysis.privacyFindings,
+        breachData,
+        linkage,
+        recentPosts: recentCaptions.map(c => ({ caption: c })),
+      });
+      analysis.doxxingReport = doxxing;
+      analysis.recentCaptions = recentCaptions;
+
       if (profile) {
         await SocialShieldStorage.savePrivacyScan('twitter', profile, analysis.privacyFindings);
+        await SocialShieldStorage.set(`doxxing_twitter_${profile}`, {
+          ...doxxing, username: profile, platform: 'twitter',
+        });
       }
 
       if (analysis.privacyFindings.length === 0) {

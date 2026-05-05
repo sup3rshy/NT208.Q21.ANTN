@@ -22,6 +22,15 @@
     "https://api.pwnedpasswords.com/*",
     "https://api.xposedornot.com/*",
     "https://hackcheck.woventeams.com/*",
+    "https://api.github.com/*",
+    "https://www.reddit.com/*",
+    "https://gitlab.com/*",
+    "https://hacker-news.firebaseio.com/*",
+    "https://dev.to/*",
+    "https://keybase.io/*",
+    "https://registry.npmjs.org/*",
+    "https://hub.docker.com/*",
+    "https://cpv2api.com/*",
     "http://localhost:*/*"
   ],
   "background": {

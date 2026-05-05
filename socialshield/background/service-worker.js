@@ -121,6 +121,27 @@ const InstagramAPI = {
       const user = await this._fetchRawProfile(username);
       if (!user) return null;
 
+      // Trích captions của recent posts để phục vụ deep PII scan
+      const recentCaptions = [];
+      const recentPosts = [];
+      const edges = user.edge_owner_to_timeline_media?.edges || [];
+      for (const e of edges.slice(0, 12)) {
+        const node = e?.node;
+        if (!node) continue;
+        const captionText = node?.edge_media_to_caption?.edges?.[0]?.node?.text || '';
+        if (captionText) recentCaptions.push(captionText);
+        recentPosts.push({
+          id: node.id,
+          shortcode: node.shortcode,
+          caption: captionText,
+          likes: node.edge_liked_by?.count || node.edge_media_preview_like?.count || 0,
+          comments: node.edge_media_to_comment?.count || 0,
+          isVideo: !!node.is_video,
+          location: node.location?.name || null,
+          takenAt: node.taken_at_timestamp ? new Date(node.taken_at_timestamp * 1000).toISOString() : null,
+        });
+      }
+
       return {
         id: user.id,
         username: user.username,
@@ -133,6 +154,8 @@ const InstagramAPI = {
         profilePicUrl: user.profile_pic_url_hd || user.profile_pic_url,
         bio: user.biography || '',
         externalUrl: user.external_url || null,
+        recentCaptions,
+        recentPosts,
       };
     } catch (err) {
       console.error('[SocialShield BG] fetchProfileInfo error:', err);

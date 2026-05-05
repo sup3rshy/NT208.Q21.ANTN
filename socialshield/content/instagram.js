@@ -580,7 +580,27 @@
         bioText = main.innerText.substring(0, 5000);
       }
 
-      const findings = SocialShieldScanner.scanPrivacy(bioText);
+      // Lấy captions của recent posts từ background API → scan sâu hơn bio
+      let recentCaptions = [];
+      let recentPosts = [];
+      let displayName = '';
+      try {
+        const info = await chrome.runtime.sendMessage({
+          type: 'FETCH_PROFILE_INFO', username: profile
+        });
+        if (info) {
+          recentCaptions = info.recentCaptions || [];
+          recentPosts = info.recentPosts || [];
+          displayName = info.fullName || '';
+        }
+      } catch { /* ignore */ }
+
+      // Deep scan: bio + displayName + tất cả captions (recon tools không thấy được)
+      const findings = SocialShieldScanner.scanFullProfile({
+        bio: bioText,
+        displayName,
+        captions: recentCaptions,
+      });
 
       // AI Text Analysis - phân tích bio có dấu hiệu scam/phishing không
       try {
@@ -646,7 +666,7 @@
         findings.push(...pwdFindings);
         // Check mỗi password phát hiện được trong Pwned Passwords DB (HIBP, free k-anonymity)
         const pwdPatterns = [
-          /(?:password|pass|mật khẩu|mk|pw)[:\s=]+['"]?([^\s'"]{4,30})['"]?/gi,
+          /\b(?:password|passwd|mật\s*khẩu)\s*[:=]\s*['"]?([A-Za-z0-9!@#$%^&*()_+\-={}\[\]|:;<>,.?/~`]{6,30})['"]?/gi,
           /(?:pin|mã pin)[:\s=]+(\d{4,8})/gi,
         ];
         for (const pattern of pwdPatterns) {
@@ -695,9 +715,44 @@
       );
       analysis.recommendations = recommendations;
 
+      // Cross-platform linkage: pull twitter profile if exists để compare
+      let linkage = null;
+      try {
+        const twHistory = await SocialShieldStorage.getProfileHistory('twitter', profile);
+        if (twHistory && twHistory.length > 0) {
+          const twLatest = twHistory[twHistory.length - 1];
+          linkage = SocialShieldScanner.detectCrossPlatformLinkage([
+            { platform: 'instagram', username: profile, displayName,
+              bio: bioText, profilePicUrl: profileData.profilePicUrl,
+              externalUrl: profileData.externalUrl },
+            { platform: 'twitter', username: profile, displayName: twLatest.displayName,
+              bio: twLatest.bio, profilePicUrl: twLatest.profilePicUrl,
+              externalUrl: twLatest.externalUrl },
+          ]);
+        }
+      } catch { /* ignore */ }
+
+      // Doxxing Report - composite narrative from all signals
+      const breachData = findings.filter(f => f.type === 'email_breach');
+      const doxxing = SocialShieldScanner.generateDoxxingReport({
+        profile: { username: profile, fullName: displayName, displayName },
+        privacyFindings: analysis.privacyFindings,
+        breachData,
+        linkage,
+        recentPosts,
+      });
+      analysis.doxxingReport = doxxing;
+      analysis.recentCaptions = recentCaptions;
+
       // Lưu kết quả
       if (profile) {
         await SocialShieldStorage.savePrivacyScan('instagram', profile, analysis.privacyFindings);
+        // Lưu doxxing report riêng để dashboard render
+        await SocialShieldStorage.set(`doxxing_instagram_${profile}`, {
+          ...doxxing,
+          username: profile,
+          platform: 'instagram',
+        });
       }
 
       // Hiển thị kết quả

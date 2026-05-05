@@ -176,6 +176,106 @@ const SocialShieldScanner = {
       });
     }
 
+    // ========== Vietnam-specific patterns ==========
+
+    // Biển số xe VN — chặt format chuẩn:
+    //  - 2 số đầu (mã tỉnh 11-99), dấu "-" gần như bắt buộc, chữ cái đầu A-Z
+    //  - Phải có dấu chấm hoặc khoảng trắng tách 5 chữ số cuối kiểu "12345" hoặc "123.45"
+    //  Ví dụ thật: 51K-12345, 30A-123.45, 59-X1 1234.56
+    //  Tránh match version/build: "v1.2 A 12345", hash, etc.
+    const vnPlate = text.match(/\b[1-9][0-9]-[A-Z][A-Z0-9]?\s?\d{3}\.?\d{2,3}\b/g);
+    if (vnPlate && vnPlate.length > 0) {
+      findings.push({
+        type: 'vn_license_plate',
+        severity: 'medium',
+        icon: '🚗',
+        title: 'Vehicle License Plate (VN)',
+        message: 'Biển số xe có thể bị lộ - dễ bị truy ngược chủ sở hữu',
+        values: [...new Set(vnPlate)]
+      });
+    }
+
+    // Mã sinh viên VN — yêu cầu PHẢI có context word.
+    //  Pattern naked "2x5xxxxx" 7 chữ số quá rộng (match được năm sản xuất, ID bất kỳ).
+    const studentIdPatterns = [
+      /\b(?:MSSV|mã\s*số\s*sinh\s*viên|student\s*id)[:\s]*(\d{7,10})\b/gi,
+    ];
+    for (const pattern of studentIdPatterns) {
+      const m = text.match(pattern);
+      if (m) {
+        findings.push({
+          type: 'vn_student_id',
+          severity: 'medium',
+          icon: '🎓',
+          title: 'Vietnamese Student ID',
+          message: 'Mã sinh viên có thể giúp tra cứu thông tin trên hệ thống nhà trường',
+          values: [...new Set(m)]
+        });
+        break;
+      }
+    }
+
+    // MoMo / Zalo / VietQR references — số ĐT kèm context payment
+    const paymentContext = text.match(/(?:momo|zalopay|vietqr|chuy[eể]n\s*kho[ảa]n|stk|s[oố]\s*tk)[:\s]+(?:0\d{9,10}|\+?\d{9,12})/gi);
+    if (paymentContext) {
+      findings.push({
+        type: 'vn_payment_handle',
+        severity: 'high',
+        icon: '💸',
+        title: 'Payment Handle Exposed (MoMo/ZaloPay/VietQR)',
+        message: 'Số ĐT/STK gắn với payment app dễ bị scam chuyển khoản giả mạo',
+        values: [...new Set(paymentContext)].map(v => v.substring(0, 30))
+      });
+    }
+
+    // Trường học / nơi làm việc - yêu cầu \b để tránh "[B]reaking[Co]llege"
+    // và bắt buộc capture-group bắt đầu bằng chữ HOA (tên riêng).
+    const schoolWorkPattern = text.match(
+      /\b(?:trường|university|college|công\s*ty|làm\s*tại|work\s*at|study\s*at|sinh\s*viên\s*tại)[:\s]+([A-ZĐ][A-Za-zÀ-ỹ][A-Za-zÀ-ỹ\s]{2,40})/gi
+    );
+    if (schoolWorkPattern && schoolWorkPattern.length > 0) {
+      findings.push({
+        type: 'school_or_work',
+        severity: 'low',
+        icon: '🏢',
+        title: 'School/Workplace Mentioned',
+        message: 'Nơi học/làm có thể giúp attacker xây dựng pretext (social engineering)',
+        values: [...new Set(schoolWorkPattern)].slice(0, 5)
+      });
+    }
+
+    // Geo / địa chỉ chi tiết — yêu cầu chặt:
+    //  - Số nhà + KHOẢNG TRẮNG + từ "đường"/"phố"/"street"/"road" ĐẦY ĐỦ (có \b và space sau)
+    //    → tránh case "3d visualizations" match "d" đơn.
+    //  - PHẢI có hậu tố quận/phường/ward/district để confirm là địa chỉ thật,
+    //    không phải đoạn text bất kỳ chứa số + "street".
+    const detailedAddr = text.match(
+      /\b\d{1,4}[A-Za-z]?(?:\s*\/\s*\d+)?\s+(?:đường|phố|street|road)\s+[A-ZĐ][\wÀ-ỹ\s]{2,30},?\s*(?:phường|quận|huyện|p\.|q\.|h\.|ward|district)\s+[\wÀ-ỹ0-9\s]{1,30}/gi
+    );
+    if (detailedAddr) {
+      findings.push({
+        type: 'detailed_address',
+        severity: 'high',
+        icon: '🗺️',
+        title: 'Detailed Address',
+        message: 'Địa chỉ cụ thể có thể bị dùng để stalking hoặc swatting',
+        values: [...new Set(detailedAddr)].slice(0, 3)
+      });
+    }
+
+    // Family relations - tag mẹ/bố/anh/em → suy ra họ thật & gia đình
+    const familyTag = text.match(/(?:mẹ|me|bố|ba|cha|anh trai|chị gái|em gái|em trai|mom|dad|sister|brother)[\s:]+@[a-zA-Z0-9._]+/gi);
+    if (familyTag) {
+      findings.push({
+        type: 'family_relation',
+        severity: 'medium',
+        icon: '👨‍👩‍👧',
+        title: 'Family Member Tagged',
+        message: 'Gắn thẻ người thân tiết lộ quan hệ gia đình - hỗ trợ social engineering',
+        values: [...new Set(familyTag)].slice(0, 5)
+      });
+    }
+
     // Passport number patterns (Vietnamese)
     const passportVN = text.match(/\b[A-Z]\d{7}\b/g);
     if (passportVN) {
@@ -393,10 +493,16 @@ const SocialShieldScanner = {
   checkPasswordExposure(text) {
     const findings = [];
 
-    // Phát hiện password viết plaintext
+    // Phát hiện password viết plaintext.
+    // Yêu cầu strict:
+    //  - Từ context phải đầy đủ ("password", "passwd", "mật khẩu") — KHÔNG match "pass"/"mk"/"pw" trần
+    //    vì "pass UAC", "pass local", "mk dir" đầy trong code/article → noise lớn.
+    //  - Phải có ký hiệu gán : hoặc = (không chỉ space) — viết tự nhiên kiểu "the password is X"
+    //    hiếm khi xuất hiện trong bio/caption.
+    //  - Min 6 ký tự cho password (4 quá ngắn → match version, mã viết tắt).
     const pwdPatterns = [
-      /(?:password|pass|mật khẩu|mk|pw)[:\s=]+['"]?([^\s'"]{4,30})['"]?/gi,
-      /(?:pin|mã pin)[:\s=]+(\d{4,8})/gi,
+      /\b(?:password|passwd|mật\s*khẩu)\s*[:=]\s*['"]?([A-Za-z0-9!@#$%^&*()_+\-={}\[\]|:;<>,.?/~`]{6,30})['"]?/gi,
+      /\b(?:pin|mã\s*pin)\s*[:=]\s*(\d{4,8})\b/gi,
     ];
 
     for (const pattern of pwdPatterns) {
@@ -1181,5 +1287,412 @@ const SocialShieldScanner = {
     }
 
     return suspects.sort((a, b) => b.impersonationScore - a.impersonationScore);
+  },
+
+  // ==================== Full Profile Scan (bio + captions + comments) ====================
+
+  /**
+   * Quét sâu toàn bộ text user-generated, không chỉ bio.
+   * Recon tools không thấy được captions/comments full → đây là lợi thế.
+   * @param {Object} data - { bio, displayName, fullName, captions: [], comments: [] }
+   * @returns {Array} merged findings, có thêm field `source` chỉ ra văn bản phát hiện
+   */
+  scanFullProfile(data) {
+    const all = [];
+    const sources = [
+      { label: 'bio', text: data.bio || '' },
+      { label: 'displayName', text: data.displayName || data.fullName || '' },
+    ];
+    if (Array.isArray(data.captions)) {
+      data.captions.forEach((c, i) => sources.push({ label: `caption#${i + 1}`, text: c || '' }));
+    }
+    if (Array.isArray(data.comments)) {
+      data.comments.forEach((c, i) => sources.push({ label: `comment#${i + 1}`, text: c || '' }));
+    }
+
+    // Dedupe findings cùng type+value để tránh nhiễu
+    const seen = new Map();
+    for (const src of sources) {
+      if (!src.text) continue;
+      const findings = this.scanPrivacy(src.text);
+      const pwdFindings = this.checkPasswordExposure(src.text);
+      for (const f of [...findings, ...pwdFindings]) {
+        const key = f.type + '|' + (f.values || []).join(',');
+        if (seen.has(key)) {
+          // Gộp nguồn
+          seen.get(key).sources.push(src.label);
+        } else {
+          seen.set(key, { ...f, sources: [src.label] });
+        }
+        all.push(f);
+      }
+    }
+    return Array.from(seen.values());
+  },
+
+  // ==================== Username Footprint Enumeration ====================
+
+  /**
+   * Danh sách site có CORS-friendly API hoặc endpoint trả status code rõ ràng.
+   * Chỉ gồm những endpoint mà fetch từ extension không cần host_permissions thêm
+   * (đều CORS-enabled hoặc có Access-Control-Allow-Origin: *).
+   */
+  FOOTPRINT_SITES: [
+    { name: 'GitHub',     url: u => `https://api.github.com/users/${u}`,
+      profile: u => `https://github.com/${u}`,
+      check: 'json', existIf: d => d && d.login && !d.message },
+    { name: 'Reddit',     url: u => `https://www.reddit.com/user/${u}/about.json`,
+      profile: u => `https://reddit.com/user/${u}`,
+      check: 'json', existIf: d => d && d.data && d.data.name },
+    { name: 'GitLab',     url: u => `https://gitlab.com/api/v4/users?username=${u}`,
+      profile: u => `https://gitlab.com/${u}`,
+      check: 'json', existIf: d => Array.isArray(d) && d.length > 0 },
+    { name: 'Hacker News',url: u => `https://hacker-news.firebaseio.com/v0/user/${u}.json`,
+      profile: u => `https://news.ycombinator.com/user?id=${u}`,
+      check: 'json', existIf: d => d && d.id },
+    { name: 'DEV.to',     url: u => `https://dev.to/api/users/by_username?url=${u}`,
+      profile: u => `https://dev.to/${u}`,
+      check: 'json', existIf: d => d && d.username },
+    { name: 'Keybase',    url: u => `https://keybase.io/_/api/1.0/user/lookup.json?usernames=${u}`,
+      profile: u => `https://keybase.io/${u}`,
+      check: 'json', existIf: d => d && d.them && d.them[0] },
+    { name: 'npm',        url: u => `https://registry.npmjs.org/-/user/org.couchdb.user:${u}`,
+      profile: u => `https://www.npmjs.com/~${u}`,
+      check: 'json', existIf: d => d && d.name && !d.error },
+    { name: 'Docker Hub', url: u => `https://hub.docker.com/v2/users/${u}/`,
+      profile: u => `https://hub.docker.com/u/${u}`,
+      check: 'json', existIf: d => d && d.username },
+    { name: 'Codepen',    url: u => `https://cpv2api.com/profile/${u}`,
+      profile: u => `https://codepen.io/${u}`,
+      check: 'json', existIf: d => d && !d.error },
+  ],
+
+  /**
+   * Quét username trên các site lớn xem account có tồn tại không.
+   * Chạy song song, timeout 6s mỗi request.
+   * @param {string} username
+   * @returns {Object} { username, found: [...], notFound: [...], errors: [...], summary }
+   */
+  async scanUsernameFootprint(username) {
+    if (!username) return null;
+    const cleanUser = String(username).trim().replace(/^@/, '');
+    if (!/^[a-zA-Z0-9_.\-]{2,30}$/.test(cleanUser)) {
+      return { username: cleanUser, error: 'invalid_username' };
+    }
+
+    const tasks = this.FOOTPRINT_SITES.map(async site => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      try {
+        const res = await fetch(site.url(cleanUser), {
+          signal: controller.signal,
+          headers: { 'Accept': 'application/json' },
+        });
+        clearTimeout(timer);
+        if (res.status === 404) return { site: site.name, exists: false };
+        if (!res.ok) return { site: site.name, error: `HTTP ${res.status}` };
+        const data = await res.json().catch(() => null);
+        const exists = site.existIf(data);
+        return {
+          site: site.name,
+          exists: !!exists,
+          profileUrl: exists ? site.profile(cleanUser) : null,
+        };
+      } catch (err) {
+        clearTimeout(timer);
+        return { site: site.name, error: err.name === 'AbortError' ? 'timeout' : err.message };
+      }
+    });
+
+    const results = await Promise.all(tasks);
+    const found = results.filter(r => r.exists);
+    const notFound = results.filter(r => r.exists === false);
+    const errors = results.filter(r => r.error);
+
+    return {
+      username: cleanUser,
+      total: this.FOOTPRINT_SITES.length,
+      found,
+      notFound,
+      errors,
+      summary: `Found on ${found.length}/${this.FOOTPRINT_SITES.length} sites`,
+    };
+  },
+
+  // ==================== Cross-Platform Linkage ====================
+
+  /**
+   * Phát hiện linkability giữa các profile trên platform khác nhau.
+   * Same person giữa IG ↔ X dễ bị doxx vì attacker pivot dữ liệu.
+   * @param {Array} profiles - [{ platform, username, displayName, bio, profilePicUrl, externalUrl }]
+   * @returns {Object} { linkagePairs, score, signals }
+   */
+  detectCrossPlatformLinkage(profiles) {
+    if (!Array.isArray(profiles) || profiles.length < 2) {
+      return { linkagePairs: [], score: 0, signals: [] };
+    }
+
+    const pairs = [];
+    for (let i = 0; i < profiles.length; i++) {
+      for (let j = i + 1; j < profiles.length; j++) {
+        const a = profiles[i], b = profiles[j];
+        if (a.platform === b.platform) continue;
+
+        const signals = [];
+        let pairScore = 0;
+
+        // 1. Username giống nhau (chuẩn hoá)
+        const ua = (a.username || '').toLowerCase().replace(/[._\-]/g, '');
+        const ub = (b.username || '').toLowerCase().replace(/[._\-]/g, '');
+        if (ua && ub && ua === ub) {
+          signals.push({ type: 'identical_username', weight: 50,
+            detail: `Same username "${a.username}" used on ${a.platform} & ${b.platform}` });
+          pairScore += 50;
+        } else if (ua && ub && (ua.includes(ub) || ub.includes(ua))) {
+          signals.push({ type: 'similar_username', weight: 25,
+            detail: `Usernames overlap: ${a.username} vs ${b.username}` });
+          pairScore += 25;
+        }
+
+        // 2. Display name giống
+        const da = (a.displayName || '').toLowerCase().trim();
+        const db = (b.displayName || '').toLowerCase().trim();
+        if (da && db && da === db) {
+          signals.push({ type: 'identical_displayname', weight: 30,
+            detail: `Display name "${a.displayName}" identical on both` });
+          pairScore += 30;
+        }
+
+        // 3. Bio chéo nhắc nhau (e.g., bio IG có "twitter.com/userX")
+        if (a.bio && b.username) {
+          const re = new RegExp(`(?:twitter\\.com|x\\.com|instagram\\.com)/${b.username}\\b`, 'i');
+          if (re.test(a.bio)) {
+            signals.push({ type: 'cross_link_bio', weight: 60,
+              detail: `${a.platform} bio links to ${b.platform} account` });
+            pairScore += 60;
+          }
+        }
+        if (b.bio && a.username) {
+          const re = new RegExp(`(?:twitter\\.com|x\\.com|instagram\\.com)/${a.username}\\b`, 'i');
+          if (re.test(b.bio)) {
+            signals.push({ type: 'cross_link_bio', weight: 60,
+              detail: `${b.platform} bio links to ${a.platform} account` });
+            pairScore += 60;
+          }
+        }
+
+        // 4. External URL trùng (Linktree, blog cá nhân...)
+        if (a.externalUrl && b.externalUrl) {
+          try {
+            const ha = new URL(a.externalUrl).hostname;
+            const hb = new URL(b.externalUrl).hostname;
+            if (ha === hb) {
+              signals.push({ type: 'shared_external_url', weight: 40,
+                detail: `Both link to same external host: ${ha}` });
+              pairScore += 40;
+            }
+          } catch {}
+        }
+
+        // 5. Profile pic pathname giống (cùng ảnh upload sang nhiều nơi)
+        if (a.profilePicUrl && b.profilePicUrl) {
+          try {
+            const pa = new URL(a.profilePicUrl).pathname;
+            const pb = new URL(b.profilePicUrl).pathname;
+            if (pa === pb) {
+              signals.push({ type: 'shared_profile_pic_path', weight: 30,
+                detail: 'Same profile picture path on both platforms' });
+              pairScore += 30;
+            }
+          } catch {}
+        }
+
+        if (pairScore >= 30) {
+          pairs.push({
+            a: { platform: a.platform, username: a.username },
+            b: { platform: b.platform, username: b.username },
+            score: Math.min(pairScore, 100),
+            confidence: pairScore >= 80 ? 'high' : pairScore >= 50 ? 'medium' : 'low',
+            signals,
+          });
+        }
+      }
+    }
+
+    pairs.sort((x, y) => y.score - x.score);
+    const totalScore = pairs.reduce((s, p) => s + p.score, 0);
+
+    return {
+      linkagePairs: pairs,
+      score: Math.min(totalScore, 100),
+      signals: pairs.flatMap(p => p.signals),
+    };
+  },
+
+  // ==================== Doxxing Report Generator ====================
+
+  /**
+   * Tổng hợp toàn bộ findings thành 1 narrative attacker-perspective report.
+   * Đây là feature differentiator chính so với recon tool — chúng chỉ liệt kê.
+   * @param {Object} input - { profile, privacyFindings, breachData, footprint, linkage, recentPosts }
+   * @returns {Object} { riskTier, narrative, attackerKnows, attackerCanDo, fixActions }
+   */
+  generateDoxxingReport(input) {
+    const { profile = {}, privacyFindings = [], breachData = [],
+            footprint = null, linkage = null, recentPosts = [] } = input;
+
+    const knows = []; // facts attacker can extract
+    const canDo = []; // attacks they can execute
+    const fix = [];   // user actions to take, ordered by impact
+
+    // === Layer 1: Identity facts ===
+    if (profile.fullName || profile.displayName) {
+      knows.push({
+        category: 'Identity',
+        fact: `Real name: **${profile.fullName || profile.displayName}**`,
+        source: 'profile_displayname',
+      });
+    }
+
+    const findingByType = {};
+    for (const f of privacyFindings) {
+      (findingByType[f.type] = findingByType[f.type] || []).push(f);
+    }
+
+    if (findingByType.email) {
+      const emails = findingByType.email.flatMap(f => f.values || []);
+      knows.push({ category: 'Contact', fact: `Email(s): ${emails.join(', ')}`, source: 'bio/captions' });
+      canDo.push('Phishing via email, password reset abuse, account enumeration on other services');
+      fix.push({ priority: 'high', action: `Remove ${emails.length} email(s) from public profile or use throwaway alias` });
+    }
+    if (findingByType.phone_vn || findingByType.phone_intl) {
+      const phones = [...(findingByType.phone_vn || []), ...(findingByType.phone_intl || [])]
+        .flatMap(f => f.values || []);
+      knows.push({ category: 'Contact', fact: `Phone: ${phones.join(', ')}`, source: 'bio/captions' });
+      canDo.push('SIM-swap attack, OTP phishing, smishing, harassment calls');
+      fix.push({ priority: 'high', action: 'Remove phone number — use messaging apps for public contact' });
+    }
+    if (findingByType.national_id || findingByType.passport) {
+      const ids = [...(findingByType.national_id || []), ...(findingByType.passport || [])]
+        .flatMap(f => f.values || []);
+      knows.push({ category: 'Government ID', fact: `ID number: ${ids.join(', ')}`, source: 'bio/captions' });
+      canDo.push('Identity theft, fraudulent loan/account opening, KYC bypass');
+      fix.push({ priority: 'critical', action: 'URGENT: delete posts containing CCCD/passport. Monitor credit reports' });
+    }
+    if (findingByType.bank_account || findingByType.credit_card || findingByType.vn_payment_handle) {
+      knows.push({ category: 'Financial', fact: 'Bank/payment handle exposed', source: 'bio/captions' });
+      canDo.push('Targeted scam transfers, fake refund schemes, MoMo/Zalo impersonation');
+      fix.push({ priority: 'critical', action: 'Remove banking info and monitor account for unauthorized activity' });
+    }
+    if (findingByType.detailed_address) {
+      knows.push({ category: 'Location', fact: 'Detailed home/work address', source: 'bio/captions' });
+      canDo.push('Stalking, doorstep harassment, swatting, package interception');
+      fix.push({ priority: 'high', action: 'Remove specific addresses — use district level only' });
+    }
+    if (findingByType.vn_license_plate) {
+      knows.push({ category: 'Vehicle', fact: 'License plate visible', source: 'photos/captions' });
+      canDo.push('Vehicle owner lookup, location tracking from public traffic cams/social posts' );
+      fix.push({ priority: 'medium', action: 'Blur plates in photos before posting' });
+    }
+    if (findingByType.school_or_work) {
+      knows.push({ category: 'Affiliation', fact: 'School/workplace mentioned', source: 'bio/captions' });
+      canDo.push('Pretexting attacks pretending to be HR/teacher, targeted spear phishing');
+      fix.push({ priority: 'medium', action: 'Be vague about employer; remove company logos in photos' });
+    }
+    if (findingByType.family_relation) {
+      knows.push({ category: 'Relationships', fact: 'Family members tagged', source: 'captions/comments' });
+      canDo.push('Pivot attack to family members (often less security-aware), emotional manipulation scams');
+      fix.push({ priority: 'medium', action: 'Avoid tagging family with relation labels publicly' });
+    }
+    if (findingByType.dob) {
+      knows.push({ category: 'Identity', fact: 'Date of birth', source: 'bio/captions' });
+      canDo.push('Combined with name → bypass KYC questions; combined with email → password guessing');
+      fix.push({ priority: 'medium', action: 'Hide birth year; show only month/day for greetings if needed' });
+    }
+    if (findingByType.api_token || findingByType.password_exposed || findingByType.password_pwned) {
+      knows.push({ category: 'Credentials', fact: 'API key or password leaked in plaintext', source: 'bio/captions' });
+      canDo.push('Direct account takeover, code repo access, cloud bill abuse');
+      fix.push({ priority: 'critical', action: 'Rotate ALL exposed credentials immediately. Audit access logs' });
+    }
+
+    // === Layer 2: Breach correlation ===
+    if (Array.isArray(breachData) && breachData.length > 0) {
+      const totalBreaches = breachData.reduce((s, b) => s + (b.breachCount || 0), 0);
+      knows.push({
+        category: 'Breaches',
+        fact: `Email appeared in ${totalBreaches} known data breach(es)`,
+        source: 'HIBP/XposedOrNot/HackCheck',
+      });
+      canDo.push('Credential stuffing across services, breached password reuse exploitation');
+      fix.push({ priority: 'high', action: 'Change passwords on all services; enable 2FA; check haveibeenpwned.com' });
+    }
+
+    // === Layer 3: Footprint expansion ===
+    if (footprint && footprint.found?.length > 0) {
+      const sites = footprint.found.map(f => f.site);
+      knows.push({
+        category: 'Online Presence',
+        fact: `Username "${footprint.username}" exists on: ${sites.join(', ')}`,
+        source: 'username footprint scan',
+      });
+      canDo.push('Cross-site profile aggregation, find older/forgotten accounts with weaker passwords');
+      fix.push({ priority: 'medium',
+        action: 'Audit each linked account; delete unused; vary usernames for sensitive services' });
+    }
+
+    // === Layer 4: Cross-platform linkage ===
+    if (linkage && linkage.linkagePairs?.length > 0) {
+      const top = linkage.linkagePairs[0];
+      knows.push({
+        category: 'Linkability',
+        fact: `${top.a.platform}@${top.a.username} confirmed = ${top.b.platform}@${top.b.username} (confidence: ${top.confidence})`,
+        source: 'cross-platform linkage',
+      });
+      canDo.push('Build composite profile combining all platforms (e.g., IG photos + X opinions + LinkedIn job)');
+    }
+
+    // === Compute risk tier ===
+    let riskScore = 0;
+    riskScore += knows.length * 8;
+    if (findingByType.national_id || findingByType.passport) riskScore += 30;
+    if (findingByType.detailed_address) riskScore += 20;
+    if (findingByType.bank_account || findingByType.credit_card) riskScore += 25;
+    if (findingByType.api_token) riskScore += 25;
+    if (breachData && breachData.length > 0) riskScore += 15;
+    if (linkage?.linkagePairs?.length > 0) riskScore += 10;
+    riskScore = Math.min(riskScore, 100);
+
+    let riskTier;
+    if (riskScore >= 70) riskTier = 'critical';
+    else if (riskScore >= 45) riskTier = 'high';
+    else if (riskScore >= 20) riskTier = 'medium';
+    else riskTier = 'low';
+
+    // === Narrative ===
+    const userLabel = profile.fullName || profile.displayName || profile.username || 'this user';
+    let narrative;
+    if (knows.length === 0) {
+      narrative = `Profile của ${userLabel} không lộ thông tin nhạy cảm rõ rệt. Tiếp tục giữ thói quen này.`;
+    } else {
+      const timeEst = riskScore >= 70 ? '5-10 phút'
+                    : riskScore >= 45 ? '15-30 phút'
+                    : riskScore >= 20 ? '1-2 giờ' : 'vài giờ';
+      narrative = `Một attacker có kinh nghiệm cần khoảng **${timeEst}** để dựng hồ sơ về **${userLabel}** từ public footprint hiện tại. ` +
+                  `Họ có thể biết được ${knows.length} loại thông tin và thực hiện ${canDo.length} hướng tấn công khác nhau.`;
+    }
+
+    // Sort fix actions: critical → high → medium → low
+    const prioOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    fix.sort((a, b) => prioOrder[a.priority] - prioOrder[b.priority]);
+
+    return {
+      riskTier,
+      riskScore,
+      narrative,
+      attackerKnows: knows,
+      attackerCanDo: [...new Set(canDo)],
+      fixActions: fix,
+      generatedAt: new Date().toISOString(),
+    };
   }
 };
