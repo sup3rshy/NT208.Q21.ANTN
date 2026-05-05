@@ -10,7 +10,8 @@
       "WebFetch(domain:gist.github.com)",
       "WebSearch",
       "WebFetch(domain:deepwiki.com)",
-      "WebFetch(domain:medium.com)"
+      "WebFetch(domain:medium.com)",
+      "Bash(curl -sL https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js -o socialshield/lib/jsQR.min.js)"
     ]
   }
 }

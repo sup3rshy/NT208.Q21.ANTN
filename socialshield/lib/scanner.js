@@ -1338,33 +1338,63 @@ const SocialShieldScanner = {
    * (đều CORS-enabled hoặc có Access-Control-Allow-Origin: *).
    */
   FOOTPRINT_SITES: [
+    // ===== Dev / Code platforms =====
     { name: 'GitHub',     url: u => `https://api.github.com/users/${u}`,
       profile: u => `https://github.com/${u}`,
-      check: 'json', existIf: d => d && d.login && !d.message },
-    { name: 'Reddit',     url: u => `https://www.reddit.com/user/${u}/about.json`,
-      profile: u => `https://reddit.com/user/${u}`,
-      check: 'json', existIf: d => d && d.data && d.data.name },
+      existIf: d => d && d.login && !d.message },
     { name: 'GitLab',     url: u => `https://gitlab.com/api/v4/users?username=${u}`,
       profile: u => `https://gitlab.com/${u}`,
-      check: 'json', existIf: d => Array.isArray(d) && d.length > 0 },
-    { name: 'Hacker News',url: u => `https://hacker-news.firebaseio.com/v0/user/${u}.json`,
-      profile: u => `https://news.ycombinator.com/user?id=${u}`,
-      check: 'json', existIf: d => d && d.id },
+      existIf: d => Array.isArray(d) && d.length > 0 },
+    { name: 'Codeberg',   url: u => `https://codeberg.org/api/v1/users/${u}`,
+      profile: u => `https://codeberg.org/${u}`,
+      existIf: d => d && d.login && !d.message },
     { name: 'DEV.to',     url: u => `https://dev.to/api/users/by_username?url=${u}`,
       profile: u => `https://dev.to/${u}`,
-      check: 'json', existIf: d => d && d.username },
-    { name: 'Keybase',    url: u => `https://keybase.io/_/api/1.0/user/lookup.json?usernames=${u}`,
-      profile: u => `https://keybase.io/${u}`,
-      check: 'json', existIf: d => d && d.them && d.them[0] },
-    { name: 'npm',        url: u => `https://registry.npmjs.org/-/user/org.couchdb.user:${u}`,
-      profile: u => `https://www.npmjs.com/~${u}`,
-      check: 'json', existIf: d => d && d.name && !d.error },
+      existIf: d => d && d.username },
     { name: 'Docker Hub', url: u => `https://hub.docker.com/v2/users/${u}/`,
       profile: u => `https://hub.docker.com/u/${u}`,
-      check: 'json', existIf: d => d && d.username },
-    { name: 'Codepen',    url: u => `https://cpv2api.com/profile/${u}`,
-      profile: u => `https://codepen.io/${u}`,
-      check: 'json', existIf: d => d && !d.error },
+      existIf: d => d && d.username },
+    { name: 'npm',        url: u => `https://registry.npmjs.com/-/v1/search?text=author:${u}&size=1`,
+      profile: u => `https://www.npmjs.com/~${u}`,
+      existIf: d => d && d.objects && d.objects.length > 0 &&
+                    d.objects.some(o => (o.package?.author?.name || '').toLowerCase() === u.toLowerCase()) },
+
+    // ===== Forums / Community =====
+    { name: 'Reddit',     url: u => `https://www.reddit.com/user/${u}/about.json`,
+      profile: u => `https://reddit.com/user/${u}`,
+      existIf: d => d && d.data && d.data.name && !d.data.is_suspended },
+    { name: 'Hacker News',url: u => `https://hacker-news.firebaseio.com/v0/user/${u}.json`,
+      profile: u => `https://news.ycombinator.com/user?id=${u}`,
+      existIf: d => d && d.id },
+    { name: 'Wikipedia',  url: u => `https://en.wikipedia.org/w/api.php?action=query&list=users&ususers=${encodeURIComponent(u)}&format=json&origin=*`,
+      profile: u => `https://en.wikipedia.org/wiki/User:${u}`,
+      existIf: d => d?.query?.users?.[0] && !d.query.users[0].missing && !d.query.users[0].invalid },
+
+    // ===== Identity / verification =====
+    { name: 'Keybase',    url: u => `https://keybase.io/_/api/1.0/user/lookup.json?usernames=${u}`,
+      profile: u => `https://keybase.io/${u}`,
+      existIf: d => d && d.them && d.them[0] },
+
+    // ===== Federated / decentralized =====
+    { name: 'Mastodon',   url: u => `https://mastodon.social/api/v1/accounts/lookup?acct=${u}`,
+      profile: u => `https://mastodon.social/@${u}`,
+      existIf: d => d && d.id && d.username },
+    { name: 'Bluesky',    url: u => `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${u}.bsky.social`,
+      profile: u => `https://bsky.app/profile/${u}.bsky.social`,
+      existIf: d => d && d.did },
+
+    // ===== Gaming / chess =====
+    { name: 'Lichess',    url: u => `https://lichess.org/api/user/${u}`,
+      profile: u => `https://lichess.org/@/${u}`,
+      existIf: d => d && d.id && !d.error },
+    { name: 'Chess.com',  url: u => `https://api.chess.com/pub/player/${u}`,
+      profile: u => `https://www.chess.com/member/${u}`,
+      existIf: d => d && d.player_id },
+
+    // ===== Competitive programming =====
+    { name: 'Codeforces', url: u => `https://codeforces.com/api/user.info?handles=${u}`,
+      profile: u => `https://codeforces.com/profile/${u}`,
+      existIf: d => d && d.status === 'OK' && Array.isArray(d.result) && d.result.length > 0 },
   ],
 
   /**
@@ -1382,14 +1412,21 @@ const SocialShieldScanner = {
 
     const tasks = this.FOOTPRINT_SITES.map(async site => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
+      const timer = setTimeout(() => controller.abort(), 8000);
       try {
         const res = await fetch(site.url(cleanUser), {
           signal: controller.signal,
           headers: { 'Accept': 'application/json' },
         });
         clearTimeout(timer);
-        if (res.status === 404) return { site: site.name, exists: false };
+        // 404 / 410 / 451 = explicitly not found
+        if ([404, 410, 451].includes(res.status)) {
+          return { site: site.name, exists: false };
+        }
+        // Site phát hiện rate-limit hoặc auth-block → đánh dấu inconclusive thay vì error
+        if ([401, 403, 429].includes(res.status)) {
+          return { site: site.name, inconclusive: true, reason: `rate-limited (${res.status})` };
+        }
         if (!res.ok) return { site: site.name, error: `HTTP ${res.status}` };
         const data = await res.json().catch(() => null);
         const exists = site.existIf(data);
@@ -1400,13 +1437,15 @@ const SocialShieldScanner = {
         };
       } catch (err) {
         clearTimeout(timer);
-        return { site: site.name, error: err.name === 'AbortError' ? 'timeout' : err.message };
+        const reason = err.name === 'AbortError' ? 'timeout' : 'network/CORS';
+        return { site: site.name, inconclusive: true, reason };
       }
     });
 
     const results = await Promise.all(tasks);
     const found = results.filter(r => r.exists);
     const notFound = results.filter(r => r.exists === false);
+    const inconclusive = results.filter(r => r.inconclusive);
     const errors = results.filter(r => r.error);
 
     return {
@@ -1414,8 +1453,10 @@ const SocialShieldScanner = {
       total: this.FOOTPRINT_SITES.length,
       found,
       notFound,
+      inconclusive,
       errors,
-      summary: `Found on ${found.length}/${this.FOOTPRINT_SITES.length} sites`,
+      summary: `Found on ${found.length}/${this.FOOTPRINT_SITES.length} sites` +
+               (inconclusive.length ? ` (${inconclusive.length} inconclusive)` : ''),
     };
   },
 

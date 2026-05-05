@@ -116,6 +116,10 @@
             <span class="ss-fab-action-icon">🎭</span>
             <span>Impersonation Check</span>
           </button>
+          <button class="ss-fab-action" data-action="audit-privacy-settings">
+            <span class="ss-fab-action-icon">⚙️</span>
+            <span>Audit Privacy Settings</span>
+          </button>
         </div>
       `;
       document.body.appendChild(fab);
@@ -183,6 +187,10 @@
         case 'check-impersonation':
           if (!profile) return this.notify('Navigate to a profile page first!', 'error');
           await this.runImpersonationCheck(profile);
+          break;
+
+        case 'audit-privacy-settings':
+          await this.runPrivacyAudit();
           break;
       }
     },
@@ -782,6 +790,20 @@
         console.error('[SocialShield] Engagement rate error:', err);
         this.notify('Error calculating engagement rate.', 'error');
       }
+    },
+
+    // ==================== Privacy Settings Audit ====================
+
+    async runPrivacyAudit() {
+      if (!location.pathname.includes('/settings/')) {
+        this.notify('Open X/Twitter Settings first (Settings → Privacy and safety / Security and account access).', 'warning');
+        return;
+      }
+      const audit = SocialShieldPrivacyAuditor.auditTwitter();
+      await SocialShieldStorage.set(`privacy_audit_twitter`, audit);
+      const sum = SocialShieldPrivacyAuditor.summarize(audit);
+      this.notify(`${sum} Open dashboard for details.`, audit.findings.length > 0 ? 'warning' : 'success');
+      chrome.runtime.sendMessage({ type: 'PRIVACY_AUDIT_COMPLETE', data: audit });
     },
 
     // ==================== Impersonation Check ====================

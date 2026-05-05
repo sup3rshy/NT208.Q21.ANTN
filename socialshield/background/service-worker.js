@@ -1,7 +1,15 @@
 /**
  * SocialShield Background Service Worker
- * Xử lý logic nền: auto-capture, notifications, Instagram API calls
+ * Xử lý logic nền: auto-capture, notifications, Instagram API calls,
+ * footprint monitor.
  */
+
+// Load SocialShieldStorage để cache + lưu alerts từ background
+try {
+  importScripts('../lib/storage.js');
+} catch (err) {
+  console.error('[SocialShield BG] Failed to importScripts storage.js:', err);
+}
 
 // ==================== Instagram API (Background) ====================
 
@@ -682,6 +690,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 
   // Setup auto-capture alarm
   setupAutoCaptureAlarm();
+  setupFootprintMonitorAlarm();
 });
 
 async function setupAutoCaptureAlarm() {
@@ -700,6 +709,125 @@ async function setupAutoCaptureAlarm() {
     console.log(`[SocialShield] Auto-capture alarm set: every ${interval} minutes`);
   } else {
     console.log('[SocialShield] Auto-capture disabled');
+  }
+}
+
+// ==================== Footprint Monitor (background) ====================
+// Quét username trên N site định kỳ. Khi có account mới xuất hiện trên site
+// mà lần trước không có → alert. Hữu ích để phát hiện ai đó tạo account mạo
+// danh hoặc service mới user vô tình đăng ký.
+
+async function setupFootprintMonitorAlarm() {
+  await chrome.alarms.clear('footprint-monitor');
+  const result = await chrome.storage.local.get('settings');
+  const settings = result.settings || {};
+  if (settings.footprintMonitorEnabled && Array.isArray(settings.footprintMonitorUsernames)
+      && settings.footprintMonitorUsernames.length > 0) {
+    const interval = settings.footprintMonitorInterval || 1440; // default 1 ngày
+    chrome.alarms.create('footprint-monitor', {
+      delayInMinutes: 5,
+      periodInMinutes: interval,
+    });
+    console.log(`[SocialShield] Footprint monitor alarm set: every ${interval} minutes`);
+  } else {
+    console.log('[SocialShield] Footprint monitor disabled');
+  }
+}
+
+const FOOTPRINT_SITES_BG = [
+  { name: 'GitHub',     url: u => `https://api.github.com/users/${u}`,
+    existIf: d => d && d.login && !d.message },
+  { name: 'GitLab',     url: u => `https://gitlab.com/api/v4/users?username=${u}`,
+    existIf: d => Array.isArray(d) && d.length > 0 },
+  { name: 'Codeberg',   url: u => `https://codeberg.org/api/v1/users/${u}`,
+    existIf: d => d && d.login && !d.message },
+  { name: 'DEV.to',     url: u => `https://dev.to/api/users/by_username?url=${u}`,
+    existIf: d => d && d.username },
+  { name: 'Reddit',     url: u => `https://www.reddit.com/user/${u}/about.json`,
+    existIf: d => d?.data?.name && !d.data.is_suspended },
+  { name: 'Hacker News',url: u => `https://hacker-news.firebaseio.com/v0/user/${u}.json`,
+    existIf: d => d && d.id },
+  { name: 'Mastodon',   url: u => `https://mastodon.social/api/v1/accounts/lookup?acct=${u}`,
+    existIf: d => d && d.id },
+  { name: 'Bluesky',    url: u => `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${u}.bsky.social`,
+    existIf: d => d && d.did },
+  { name: 'Lichess',    url: u => `https://lichess.org/api/user/${u}`,
+    existIf: d => d && d.id && !d.error },
+  { name: 'Codeforces', url: u => `https://codeforces.com/api/user.info?handles=${u}`,
+    existIf: d => d?.status === 'OK' && d.result?.length > 0 },
+];
+
+async function probeFootprintBG(username) {
+  const results = await Promise.all(FOOTPRINT_SITES_BG.map(async site => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(site.url(username), { signal: ctrl.signal, headers: { 'Accept': 'application/json' } });
+      clearTimeout(t);
+      if ([401, 403, 404, 410, 429, 451].includes(res.status)) return { site: site.name, exists: false };
+      if (!res.ok) return { site: site.name, exists: false };
+      const d = await res.json().catch(() => null);
+      return { site: site.name, exists: !!site.existIf(d) };
+    } catch {
+      return { site: site.name, exists: false };
+    }
+  }));
+  return results.reduce((acc, r) => { acc[r.site] = r.exists; return acc; }, {});
+}
+
+async function runFootprintMonitor() {
+  const result = await chrome.storage.local.get(['settings']);
+  const settings = result.settings || {};
+  const usernames = settings.footprintMonitorUsernames || [];
+  if (usernames.length === 0) return;
+
+  for (const username of usernames) {
+    try {
+      const current = await probeFootprintBG(username);
+      const prevKey = `footprint_baseline_${username}`;
+      const prev = (await chrome.storage.local.get(prevKey))[prevKey];
+
+      // Lần đầu chạy → chỉ baseline, không alert
+      if (!prev) {
+        await chrome.storage.local.set({ [prevKey]: { snapshot: current, ts: Date.now() } });
+        continue;
+      }
+
+      // So sánh: site nào xuất hiện mới?
+      const newSites = [];
+      for (const [site, exists] of Object.entries(current)) {
+        if (exists && !prev.snapshot[site]) newSites.push(site);
+      }
+
+      if (newSites.length > 0) {
+        // Lưu alert
+        await SocialShieldStorage.saveAlert({
+          type: 'footprint_new_account',
+          severity: 'high',
+          title: 'New account(s) detected with your username',
+          message: `Username "${username}" vừa xuất hiện trên: ${newSites.join(', ')}. Có thể là bạn tạo account mới — hoặc ai đó đang impersonate.`,
+          platform: 'footprint',
+          username,
+        });
+
+        if (settings.notifications !== false && self.chrome?.notifications) {
+          try {
+            chrome.notifications.create({
+              type: 'basic',
+              iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+              title: 'SocialShield — New footprint detected',
+              message: `"${username}" appeared on ${newSites.join(', ')}`,
+              priority: 2,
+            });
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Update baseline
+      await chrome.storage.local.set({ [prevKey]: { snapshot: current, ts: Date.now() } });
+    } catch (err) {
+      console.error('[SocialShield] Footprint monitor error for', username, err);
+    }
   }
 }
 
@@ -874,6 +1002,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
+    case 'UPDATE_FOOTPRINT_MONITOR':
+      setupFootprintMonitorAlarm().then(() => {
+        sendResponse({ ok: true });
+      }).catch(err => {
+        console.error('[SocialShield] UPDATE_FOOTPRINT_MONITOR error:', err);
+        sendResponse({ ok: false });
+      });
+      return true;
+
+    case 'RUN_FOOTPRINT_MONITOR_NOW':
+      runFootprintMonitor().then(() => {
+        sendResponse({ ok: true });
+      }).catch(err => {
+        console.error('[SocialShield] RUN_FOOTPRINT_MONITOR_NOW error:', err);
+        sendResponse({ ok: false, error: err.message });
+      });
+      return true;
+
     case 'RUN_AUTO_CAPTURE_NOW':
       runAutoCapture().then(() => {
         sendResponse({ ok: true });
@@ -944,6 +1090,8 @@ function updateBadge(tabId, data) {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'auto-capture') {
     await runAutoCapture();
+  } else if (alarm.name === 'footprint-monitor') {
+    await runFootprintMonitor();
   }
 });
 

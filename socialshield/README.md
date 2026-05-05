@@ -92,12 +92,21 @@ PII patterns được detect:
 Mỗi engine cộng/trừ score độc lập, score < 50 → unsafe. Kết quả hiển thị inline + highlight link unsafe trên page.
 
 ### 5. Username Footprint Enumeration (Sherlock-style)
-Quét username song song trên 9 site CORS-friendly: GitHub, Reddit, GitLab, Hacker News, dev.to, Keybase, npm, Docker Hub, Codepen.
+Quét username song song trên **15 site CORS-friendly**:
 
-- Timeout 6s/request, parallel `Promise.all`
-- Hiển thị bảng Found/Not found/Errors + profile URL
+| Category | Sites |
+|---|---|
+| Dev/Code | GitHub, GitLab, Codeberg, dev.to, Docker Hub, npm |
+| Forums | Reddit, Hacker News, Wikipedia |
+| Identity | Keybase |
+| Federated | Mastodon, Bluesky |
+| Gaming | Lichess, Chess.com |
+| Competitive | Codeforces |
+
+- Timeout 8s/request, parallel `Promise.all`
+- 3 trạng thái: Found / Not found / **Inconclusive** (rate-limit / CORS / network) — phân biệt rõ với errors thực sự
 - Cảnh báo nếu username dùng ≥3 site (linkability risk)
-- Chạy được client-side (dashboard) hoặc background (auto-monitoring)
+- Chạy được client-side (dashboard Tools) hoặc background monitor (#11 bên dưới)
 
 ### 6. Cross-Platform Linkage Detector
 So sánh profile IG ↔ X cùng người dùng — phát hiện linkability mà attacker dùng để pivot:
@@ -237,11 +246,14 @@ Không cần API key cho: Email breach (XposedOrNot/HackCheck), Pwned Passwords 
 
 ### Dashboard Tools (standalone, không cần page nào)
 Open Dashboard → tab **Tools**:
-- **Username Footprint** — input username, quét 9 site
+- **Username Footprint** — input username, quét 15 site
 - **URL Safety Check** — paste URL bất kỳ, chạy heuristic + GSB + VT + URLhaus
 - **Text PII Scanner** — paste bất kỳ text (bio, message, file...)
 - **Email Breach Check** — input email
 - **Password Pwned Check** — input password (k-anonymity, không lưu)
+- **Image Privacy Scanner** — chọn file ảnh, quét EXIF GPS + VietQR + CCCD heuristic + OCR opt-in
+- **Footprint Monitor** — config danh sách username + interval cho background monitoring
+- **Privacy Audit Viewer** — xem report mới nhất từ FAB IG/X audit
 
 ### Doxxing Risk
 Open Dashboard → tab **Doxxing Risk**:
@@ -311,14 +323,40 @@ GitHub • Reddit • GitLab • Hacker News • dev.to • Keybase • npm • 
 
 ---
 
+### 12. Image Privacy Scanner
+Quét ảnh local 100% client-side (ảnh không rời máy):
+
+- **EXIF GPS extraction** — bóc lat/lng từ JPEG metadata (no deps, ~150 dòng JS thuần). Cảnh báo + link Google Maps khi có GPS leak.
+- **EXIF camera info** — Make/Model + DateTimeOriginal (suy ra timezone/schedule).
+- **VietQR / Bank QR decode** — dùng jsQR bundle local (`lib/jsQR.min.js`), parse EMV format → trích bank BIN + account number + amount + merchant.
+- **CCCD/CMND heuristic** — aspect ratio (1.585) + dominant color + brightness. Cảnh báo trước khi user post.
+- **OCR workaround** — Tesseract.js không bundle được trong MV3 (CSP `script-src 'self'` cấm remote script, lib ~10MB với worker setup phức tạp). Workflow thay thế: dùng [tesseract.projectnaptha.com](https://tesseract.projectnaptha.com/) hoặc Google Lens → copy text → paste vào **Text PII Scanner**.
+
+### 13. Background Footprint Monitor
+Quét username trên 10 site định kỳ (interval 6h-7d), so sánh baseline:
+- Site mới có account → alert + Chrome notification
+- Phát hiện sớm impersonator hoặc service user vô tình đăng ký
+- Settings UI ngay trong dashboard Tools
+
+### 14. Privacy Settings Auditor (IG/X)
+First-person view mà recon tools không thấy được. FAB action **"Audit Privacy Settings"** đọc DOM của trang Settings:
+
+| Platform | Audited |
+|---|---|
+| Instagram | Private account toggle, Activity status, Story resharing, 2FA, Login activity sessions, Apps & Websites count |
+| X/Twitter | Protect posts, Tag policy, Findable by email/phone, Active sessions, Connected apps, 2FA |
+
+Output: Privacy Posture score 0-100 + findings categorized (visibility/tracking/session/oauth/auth) + actionable recommendations.
+
+---
+
 ## Roadmap
 
-- [ ] EXIF/pHash phân tích ảnh post (geolocation leak detection)
-- [ ] Privacy settings auditor đọc trang Settings IG/X
-- [ ] OCR CCCD/biển số trên ảnh (Tesseract.js cục bộ)
-- [ ] Background continuous monitoring footprint (alert khi xuất hiện account mới mang username user)
-- [ ] Bank QR detection trong ảnh (jsQR + VietQR decode)
-- [ ] Auto-detect khuôn ảnh CCCD VN trước khi user post
+- [ ] pHash profile pic so cross-platform (cùng ảnh = same person)
+- [ ] Reverse image search shortcut (Google Lens / Yandex / TinEye buttons)
+- [ ] Geo-pattern map từ multiple posts (heatmap)
+- [ ] Auto-blur PII trên ảnh trước khi post (PoC)
+- [ ] Mass apps revocation helper
 
 ---
 

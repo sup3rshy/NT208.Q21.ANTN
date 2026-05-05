@@ -25,12 +25,18 @@
     "https://api.github.com/*",
     "https://www.reddit.com/*",
     "https://gitlab.com/*",
+    "https://codeberg.org/*",
     "https://hacker-news.firebaseio.com/*",
     "https://dev.to/*",
     "https://keybase.io/*",
-    "https://registry.npmjs.org/*",
+    "https://registry.npmjs.com/*",
     "https://hub.docker.com/*",
-    "https://cpv2api.com/*",
+    "https://en.wikipedia.org/*",
+    "https://mastodon.social/*",
+    "https://public.api.bsky.app/*",
+    "https://lichess.org/*",
+    "https://api.chess.com/*",
+    "https://codeforces.com/*",
     "http://localhost:*/*"
   ],
   "background": {
@@ -39,13 +45,13 @@
   "content_scripts": [
     {
       "matches": ["https://www.instagram.com/*"],
-      "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "lib/text-analyzer.js", "content/instagram.js"],
+      "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "lib/text-analyzer.js", "lib/privacy-auditor.js", "content/instagram.js"],
       "css": ["content/instagram.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "lib/text-analyzer.js", "content/twitter.js"],
+      "js": ["lib/storage.js", "lib/diff.js", "lib/scanner.js", "lib/text-analyzer.js", "lib/privacy-auditor.js", "content/twitter.js"],
       "css": ["content/twitter.css"],
       "run_at": "document_idle"
     }

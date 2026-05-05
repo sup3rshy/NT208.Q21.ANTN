@@ -1191,6 +1191,9 @@
           for (const r of result.notFound) {
             html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: var(--text-secondary);">✗ Not found</td><td style="padding:6px;">—</td></tr>`;
           }
+          for (const r of (result.inconclusive || [])) {
+            html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: #fbbf24;">? ${r.reason}</td><td style="padding:6px; font-size: 11px; color: var(--text-secondary);">—</td></tr>`;
+          }
           for (const r of result.errors) {
             html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: orange;">⚠ ${r.error}</td><td style="padding:6px;">—</td></tr>`;
           }
@@ -1305,6 +1308,140 @@
         }
       });
 
+      // ============= Image Privacy Scanner =============
+      let lastImageBlob = null;
+      let lastImageEl = null;
+      document.getElementById('btn-tool-image-scan').addEventListener('click', async () => {
+        const fileInput = document.getElementById('tool-image-input');
+        const out = document.getElementById('tool-image-result');
+        const file = fileInput.files?.[0];
+        if (!file) { out.innerHTML = '<div style="color:var(--danger);">Choose an image first</div>'; return; }
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Analyzing (EXIF + QR + CCCD)...</div>';
+        try {
+          lastImageBlob = file;
+          const result = await SocialShieldImageAnalyzer.scanImage(file);
+          let html = '';
+
+          // EXIF GPS
+          if (result.exif) {
+            const e = result.exif;
+            html += '<h3 style="margin: 8px 0;">📍 EXIF Metadata</h3>';
+            if (e.gps?.latitude !== undefined) {
+              const lat = e.gps.latitude.toFixed(6);
+              const lng = e.gps.longitude.toFixed(6);
+              html += `<div style="padding: 10px; background: rgba(239,68,68,0.1); border-left: 3px solid var(--danger); border-radius: 4px; margin-bottom: 8px;"><b style="color: var(--danger);">⚠ GPS LEAK:</b> ${lat}, ${lng} <a href="https://maps.google.com/?q=${lat},${lng}" target="_blank" style="color: var(--accent); margin-left: 8px;">→ View on map</a><br><span style="font-size: 11px; color: var(--text-secondary);">Anyone with this image can find where it was taken.</span></div>`;
+            }
+            const meta = [];
+            if (e.make) meta.push(`Camera: ${this._escapeHtml(e.make)} ${this._escapeHtml(e.model || '')}`);
+            if (e.dateTimeOriginal) meta.push(`Taken: ${this._escapeHtml(e.dateTimeOriginal)}`);
+            if (meta.length) html += `<div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">${meta.join(' • ')}</div>`;
+            if (!e.gps?.latitude && !meta.length) html += `<div style="color: var(--accent);">✓ No sensitive metadata.</div>`;
+          } else {
+            html += '<h3 style="margin: 8px 0;">📍 EXIF</h3><div style="color: var(--text-secondary);">No EXIF (PNG or stripped JPEG).</div>';
+          }
+
+          // QR
+          if (result.qr) {
+            html += '<h3 style="margin: 16px 0 8px;">📱 QR Code</h3>';
+            if (result.qr.isVietQR) {
+              html += `<div style="padding: 10px; background: rgba(239,68,68,0.1); border-left: 3px solid var(--danger); border-radius: 4px;"><b style="color: var(--danger);">⚠ VietQR detected — bank account exposed:</b><br>`;
+              if (result.qr.bankBin) html += `Bank BIN: <code>${this._escapeHtml(result.qr.bankBin)}</code><br>`;
+              if (result.qr.accountNumber) html += `Account: <code>${this._escapeHtml(result.qr.accountNumber)}</code><br>`;
+              if (result.qr.merchantName) html += `Name: ${this._escapeHtml(result.qr.merchantName)}<br>`;
+              if (result.qr.amount) html += `Amount: ${this._escapeHtml(result.qr.amount)}<br>`;
+              html += `<span style="font-size: 11px; color: var(--text-secondary);">Đăng STK lên public dễ bị scam chuyển khoản giả mạo (gửi tiền nhầm rồi kiện).</span></div>`;
+            } else {
+              html += `<div style="padding: 8px; background: rgba(255,255,255,0.04); border-radius: 4px;"><b>QR raw data:</b> <code style="font-size: 11px; word-break: break-all;">${this._escapeHtml(result.qr.rawData.substring(0, 200))}${result.qr.rawData.length > 200 ? '...' : ''}</code></div>`;
+            }
+          } else {
+            html += '<h3 style="margin: 16px 0 8px;">📱 QR</h3><div style="color: var(--text-secondary);">No QR code detected.</div>';
+          }
+
+          // CCCD heuristic
+          if (result.idCard) {
+            html += '<h3 style="margin: 16px 0 8px;">🆔 ID Card Heuristic</h3>';
+            if (result.idCard.likelyIdCard) {
+              html += `<div style="padding: 10px; background: rgba(245,158,11,0.1); border-left: 3px solid orange; border-radius: 4px;"><b style="color: orange;">⚠ Possible CCCD/CMND image (confidence: ${Math.round(result.idCard.confidence * 100)}%)</b><br>Signals: ${result.idCard.signals.join('; ')}<br><span style="font-size: 11px; color: var(--text-secondary);">Do NOT post ID card photos publicly. KHÔNG đăng ảnh CCCD lên mạng — kể cả góc nhỏ trong ảnh khoe.</span></div>`;
+            } else {
+              html += `<div style="color: var(--accent); font-size: 12px;">Not detected as ID card (confidence ${Math.round(result.idCard.confidence * 100)}%).</div>`;
+            }
+          }
+
+          if (result.errors.length > 0) {
+            html += `<div style="margin-top: 8px; font-size: 11px; color: orange;">Errors: ${result.errors.join('; ')}</div>`;
+          }
+
+          // Lưu image element để OCR sau dùng
+          lastImageEl = await SocialShieldImageAnalyzer._blobToImage(file);
+
+          out.innerHTML = html;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      });
+
+      // ============= Footprint Monitor =============
+      this._loadFootprintMonitorSettings();
+
+      document.getElementById('btn-tool-fpmon-save').addEventListener('click', async () => {
+        const usernames = document.getElementById('tool-fpmon-usernames').value
+          .split('\n').map(s => s.trim()).filter(Boolean);
+        const enabled = document.getElementById('tool-fpmon-enabled').checked;
+        const interval = parseInt(document.getElementById('tool-fpmon-interval').value, 10) || 1440;
+
+        const settings = await SocialShieldStorage.getSettings();
+        settings.footprintMonitorEnabled = enabled;
+        settings.footprintMonitorUsernames = usernames;
+        settings.footprintMonitorInterval = interval;
+        await SocialShieldStorage.saveSettings(settings);
+        await chrome.runtime.sendMessage({ type: 'UPDATE_FOOTPRINT_MONITOR' });
+        document.getElementById('tool-fpmon-result').innerHTML =
+          `<div style="color: var(--accent);">✓ Saved. ${enabled ? `Monitoring ${usernames.length} username(s) every ${interval} min.` : 'Monitoring disabled.'}</div>`;
+      });
+
+      document.getElementById('btn-tool-fpmon-run').addEventListener('click', async () => {
+        const out = document.getElementById('tool-fpmon-result');
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Running monitor now...</div>';
+        try {
+          await chrome.runtime.sendMessage({ type: 'RUN_FOOTPRINT_MONITOR_NOW' });
+          out.innerHTML = '<div style="color: var(--accent);">✓ Monitor run completed. Check Alerts tab for new accounts.</div>';
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      });
+
+      // ============= Privacy Audit Viewer =============
+      document.getElementById('btn-tool-audit-load').addEventListener('click', async () => {
+        const out = document.getElementById('tool-audit-result');
+        const ig = await SocialShieldStorage.get('privacy_audit_instagram');
+        const tw = await SocialShieldStorage.get('privacy_audit_twitter');
+        let html = '';
+        for (const [label, audit] of [['Instagram', ig], ['Twitter/X', tw]]) {
+          if (!audit) continue;
+          const color = audit.score >= 70 ? 'var(--accent)' : audit.score >= 40 ? '#fbbf24' : 'var(--danger)';
+          html += `<div style="padding: 12px; margin-bottom: 12px; background: rgba(255,255,255,0.04); border-radius: 8px;">`;
+          html += `<div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;"><h3 style="margin:0;">${label}</h3><div style="font-size: 24px; font-weight: 700; color: ${color};">${audit.score}<span style="font-size: 12px;">/100</span></div></div>`;
+          html += `<div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">Audited at ${new Date(audit.auditedAt).toLocaleString()} on <code>${this._escapeHtml(audit.url)}</code></div>`;
+          if (audit.findings.length === 0) {
+            html += `<div style="color: var(--accent); font-size: 13px;">${audit.contextNote || 'No issues found on this page.'}</div>`;
+          } else {
+            for (const f of audit.findings) {
+              const sevColor = f.severity === 'high' ? 'var(--danger)' : f.severity === 'medium' ? '#fbbf24' : 'var(--text-secondary)';
+              html += `<div style="padding: 8px; margin-bottom: 6px; border-left: 3px solid ${sevColor}; background: rgba(255,255,255,0.03); border-radius: 3px;">`;
+              html += `<div><b>${this._escapeHtml(f.title)}</b> <span style="font-size: 10px; color: ${sevColor}; text-transform: uppercase;">[${f.severity}]</span></div>`;
+              html += `<div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">${this._escapeHtml(f.message)}</div>`;
+              html += `<div style="font-size: 12px; color: var(--accent); margin-top: 4px;">→ ${this._escapeHtml(f.recommendation)}</div>`;
+              html += `</div>`;
+            }
+          }
+          html += '</div>';
+        }
+        if (!html) {
+          html = '<div class="ss-empty-state" style="padding: 16px;"><div class="ss-empty-icon">⚙️</div><p>Chưa có audit. Mở Instagram Settings hoặc X Settings → click FAB → Audit Privacy Settings.</p></div>';
+        }
+        out.innerHTML = html;
+      });
+
       // Password Pwned check (via service worker, k-anonymity)
       document.getElementById('btn-tool-pwd-check').addEventListener('click', async () => {
         const password = document.getElementById('tool-pwd-input').value;
@@ -1331,6 +1468,16 @@
     _escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, c =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    },
+
+    async _loadFootprintMonitorSettings() {
+      const settings = await SocialShieldStorage.getSettings();
+      const usernames = settings.footprintMonitorUsernames || [];
+      const enabled = !!settings.footprintMonitorEnabled;
+      const interval = settings.footprintMonitorInterval || 1440;
+      document.getElementById('tool-fpmon-usernames').value = usernames.join('\n');
+      document.getElementById('tool-fpmon-enabled').checked = enabled;
+      document.getElementById('tool-fpmon-interval').value = String(interval);
     },
 
     // ==================== Doxxing Risk Page ====================

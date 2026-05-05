@@ -123,6 +123,10 @@
             <span class="ss-fab-action-icon">🎭</span>
             <span>Impersonation Check</span>
           </button>
+          <button class="ss-fab-action" data-action="audit-privacy-settings">
+            <span class="ss-fab-action-icon">⚙️</span>
+            <span>Audit Privacy Settings</span>
+          </button>
         </div>
       `;
       document.body.appendChild(fab);
@@ -195,7 +199,28 @@
           if (!profile) return this.notify('Navigate to a profile page first!', 'error');
           await this.runImpersonationCheck(profile);
           break;
+
+        case 'audit-privacy-settings':
+          await this.runPrivacyAudit();
+          break;
       }
+    },
+
+    async runPrivacyAudit() {
+      if (!location.pathname.includes('/accounts/') &&
+          !location.pathname.includes('privacy') &&
+          !location.pathname.includes('login_activity') &&
+          !location.pathname.includes('apps_and_websites') &&
+          !location.pathname.includes('two_factor') &&
+          !location.pathname.includes('security')) {
+        this.notify('Open Instagram Settings page first (Settings → Privacy / Security / Login activity / Apps).', 'warning');
+        return;
+      }
+      const audit = SocialShieldPrivacyAuditor.auditInstagram();
+      await SocialShieldStorage.set(`privacy_audit_instagram`, audit);
+      const sum = SocialShieldPrivacyAuditor.summarize(audit);
+      this.notify(`${sum} Open dashboard for details.`, audit.findings.length > 0 ? 'warning' : 'success');
+      chrome.runtime.sendMessage({ type: 'PRIVACY_AUDIT_COMPLETE', data: audit });
     },
 
     // ==================== Capture Logic ====================

@@ -356,6 +356,64 @@
             <div id="tool-pwd-result"></div>
           </div>
         </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>📷 Image Privacy Scanner</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Quét ảnh local: <b>EXIF GPS</b> (geo leak) + <b>VietQR/Bank QR</b> (decode STK + bank) +
+              <b>CCCD heuristic</b> (cảnh báo trước khi post). Tất cả chạy 100% client-side, ảnh không rời máy.
+              <br><span style="font-size: 11px;">OCR text trong ảnh: do MV3 CSP cấm remote script + Tesseract.js
+              quá nặng để bundle, dùng workaround: <a href="https://tesseract.projectnaptha.com/" target="_blank" style="color: var(--accent);">tesseract.projectnaptha.com</a> hoặc Google Lens
+              → copy text → paste vào "Text PII Scanner" ở trên.</span>
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+              <input type="file" class="ss-input" id="tool-image-input" accept="image/*" style="flex: 1; min-width: 200px;">
+              <button class="ss-btn ss-btn-primary" id="btn-tool-image-scan">Scan</button>
+            </div>
+            <div id="tool-image-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>📡 Footprint Monitor (background)</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Quét username trên 10 site định kỳ. Khi xuất hiện account mới (có thể là impersonator hoặc service bạn vô tình đăng ký) → alert.
+            </p>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Usernames to monitor (1 mỗi dòng)</label>
+              <textarea class="ss-input" id="tool-fpmon-usernames" rows="3" placeholder="myusername&#10;another_handle" style="width: 100%; font-family: monospace;"></textarea>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+              <label style="font-size: 13px;">
+                <input type="checkbox" id="tool-fpmon-enabled"> Enable background monitoring
+              </label>
+              <select class="ss-input" id="tool-fpmon-interval" style="width: auto;">
+                <option value="360">Every 6 hours</option>
+                <option value="720">Every 12 hours</option>
+                <option value="1440" selected>Every 24 hours</option>
+                <option value="10080">Every 7 days</option>
+              </select>
+              <button class="ss-btn ss-btn-primary" id="btn-tool-fpmon-save">Save</button>
+              <button class="ss-btn" id="btn-tool-fpmon-run">Run now</button>
+            </div>
+            <div id="tool-fpmon-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>⚙️ Privacy Settings Audit</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              Chạy audit từ FAB trên Instagram Settings hoặc X Settings page. Kết quả gần nhất hiển thị ở đây.
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <button class="ss-btn" id="btn-tool-audit-load">Load latest audit</button>
+            </div>
+            <div id="tool-audit-result"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Doxxing Risk Page -->
@@ -776,6 +834,7 @@
   <script src="../lib/storage.js"></script>
   <script src="../lib/diff.js"></script>
   <script src="../lib/scanner.js"></script>
+  <script src="../lib/image-analyzer.js"></script>
   <script src="../lib/text-analyzer.js"></script>
   <script src="dashboard.js"></script>
 </body>
