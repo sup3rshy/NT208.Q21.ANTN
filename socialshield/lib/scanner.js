@@ -1392,9 +1392,12 @@ const SocialShieldScanner = {
       existIf: d => d && d.player_id },
 
     // ===== Competitive programming =====
-    { name: 'Codeforces', url: u => `https://codeforces.com/api/user.info?handles=${u}`,
+    // Codeforces API hay 403/CORS-block từ extension → check profile HTML thay thế.
+    // Profile page tồn tại có chứa data-handle attribute hoặc class userbox.
+    { name: 'Codeforces', url: u => `https://codeforces.com/profile/${u}`,
       profile: u => `https://codeforces.com/profile/${u}`,
-      existIf: d => d && d.status === 'OK' && Array.isArray(d.result) && d.result.length > 0 },
+      kind: 'text',
+      existIf: text => /class=["'][^"']*userbox|data-handle=|<title>[^<]*\b\S+\s+-\s+Codeforces/i.test(text) },
   ],
 
   /**
@@ -1414,9 +1417,10 @@ const SocialShieldScanner = {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
       try {
+        const isText = site.kind === 'text';
         const res = await fetch(site.url(cleanUser), {
           signal: controller.signal,
-          headers: { 'Accept': 'application/json' },
+          headers: { 'Accept': isText ? 'text/html,*/*' : 'application/json' },
         });
         clearTimeout(timer);
         // 404 / 410 / 451 = explicitly not found
@@ -1428,8 +1432,14 @@ const SocialShieldScanner = {
           return { site: site.name, inconclusive: true, reason: `rate-limited (${res.status})` };
         }
         if (!res.ok) return { site: site.name, error: `HTTP ${res.status}` };
-        const data = await res.json().catch(() => null);
-        const exists = site.existIf(data);
+
+        let parsed;
+        if (isText) {
+          parsed = await res.text().catch(() => '');
+        } else {
+          parsed = await res.json().catch(() => null);
+        }
+        const exists = site.existIf(parsed);
         return {
           site: site.name,
           exists: !!exists,

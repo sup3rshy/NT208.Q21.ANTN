@@ -753,8 +753,8 @@ const FOOTPRINT_SITES_BG = [
     existIf: d => d && d.did },
   { name: 'Lichess',    url: u => `https://lichess.org/api/user/${u}`,
     existIf: d => d && d.id && !d.error },
-  { name: 'Codeforces', url: u => `https://codeforces.com/api/user.info?handles=${u}`,
-    existIf: d => d?.status === 'OK' && d.result?.length > 0 },
+  { name: 'Codeforces', url: u => `https://codeforces.com/profile/${u}`, kind: 'text',
+    existIf: text => /class=["'][^"']*userbox|data-handle=|<title>[^<]*\b\S+\s+-\s+Codeforces/i.test(text) },
 ];
 
 async function probeFootprintBG(username) {
@@ -762,12 +762,16 @@ async function probeFootprintBG(username) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 8000);
-      const res = await fetch(site.url(username), { signal: ctrl.signal, headers: { 'Accept': 'application/json' } });
+      const isText = site.kind === 'text';
+      const res = await fetch(site.url(username), {
+        signal: ctrl.signal,
+        headers: { 'Accept': isText ? 'text/html,*/*' : 'application/json' }
+      });
       clearTimeout(t);
       if ([401, 403, 404, 410, 429, 451].includes(res.status)) return { site: site.name, exists: false };
       if (!res.ok) return { site: site.name, exists: false };
-      const d = await res.json().catch(() => null);
-      return { site: site.name, exists: !!site.existIf(d) };
+      const parsed = isText ? await res.text().catch(() => '') : await res.json().catch(() => null);
+      return { site: site.name, exists: !!site.existIf(parsed) };
     } catch {
       return { site: site.name, exists: false };
     }
