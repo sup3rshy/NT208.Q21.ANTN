@@ -835,6 +835,122 @@ async function runFootprintMonitor() {
   }
 }
 
+// ==================== Cross-Profile pHash Diff (Impersonation/Reuse Detection) ====================
+
+function _hashDist(h1, h2) {
+  if (!h1 || !h2 || h1.length !== h2.length) return -1;
+  let d = 0;
+  for (let i = 0; i < h1.length; i++) if (h1[i] !== h2[i]) d++;
+  return d;
+}
+
+/**
+ * So sánh profile pic pHash giữa tất cả profile đã track.
+ * Pair (platformA, userA) vs (platformB, userB) coi là match nếu:
+ *   - pHash distance <= 10 (perceptually similar)
+ *   - cùng platform + khác username → IMPERSONATION strong signal
+ *   - khác platform → có thể là cross-platform reuse (không phải lo, nhưng vẫn note)
+ *
+ * Alert được de-dupe theo pair key trong storage.
+ */
+async function runCrossProfilePHashScan() {
+  try {
+    const all = await chrome.storage.local.get(null);
+    const profiles = [];
+    for (const [key, value] of Object.entries(all)) {
+      if (!key.startsWith('profile_')) continue;
+      if (!Array.isArray(value) || value.length === 0) continue;
+      const parts = key.split('_'); // profile_<platform>_<username>
+      if (parts.length < 3) continue;
+      const platform = parts[1];
+      const username = parts.slice(2).join('_');
+      const latest = value[value.length - 1];
+      if (!latest || !latest.profilePicPHash) continue;
+      profiles.push({ platform, username, pHash: latest.profilePicPHash, profilePicUrl: latest.profilePicUrl });
+    }
+
+    if (profiles.length < 2) return { compared: 0, matches: [] };
+
+    const seenKey = 'phash_diff_seen_pairs';
+    const seen = (await chrome.storage.local.get(seenKey))[seenKey] || {};
+    const matches = [];
+
+    for (let i = 0; i < profiles.length; i++) {
+      for (let j = i + 1; j < profiles.length; j++) {
+        const a = profiles[i], b = profiles[j];
+        // Skip same profile (cùng platform + cùng username)
+        if (a.platform === b.platform && a.username === b.username) continue;
+
+        const dist = _hashDist(a.pHash, b.pHash);
+        if (dist < 0 || dist > 10) continue;
+
+        const sameUsername = a.username.toLowerCase() === b.username.toLowerCase();
+        const samePlatform = a.platform === b.platform;
+        let severity = 'low';
+        let label = '';
+
+        if (samePlatform && !sameUsername) {
+          severity = 'high';
+          label = `Possible impersonation: 2 ${a.platform} accounts dùng cùng/giống profile pic`;
+        } else if (!samePlatform && sameUsername) {
+          severity = 'low';
+          label = `Cross-platform reuse: cùng username + cùng profile pic (likely you)`;
+        } else if (!samePlatform && !sameUsername) {
+          severity = 'medium';
+          label = `Khác platform + khác username nhưng giống profile pic → đáng nghi`;
+        } else continue;
+
+        const pairKey = [a.platform + ':' + a.username, b.platform + ':' + b.username].sort().join('|');
+        const match = {
+          pairKey, severity, label, distance: dist,
+          a: { platform: a.platform, username: a.username },
+          b: { platform: b.platform, username: b.username },
+          detectedAt: new Date().toISOString(),
+        };
+        matches.push(match);
+
+        if (!seen[pairKey] && severity !== 'low') {
+          // Raise alert
+          if (typeof SocialShieldStorage !== 'undefined') {
+            try {
+              await SocialShieldStorage.saveAlert({
+                type: 'cross_profile_phash_match',
+                severity,
+                title: severity === 'high'
+                  ? '⚠ Possible impersonation detected'
+                  : 'Suspicious profile-pic similarity',
+                message: `${label}. ${a.platform}/@${a.username} ↔ ${b.platform}/@${b.username} (pHash distance ${dist}/64).`,
+                platform: a.platform,
+                username: a.username,
+                metadata: match,
+              });
+            } catch (err) { /* ignore */ }
+          }
+
+          if (chrome.notifications && severity === 'high') {
+            try {
+              chrome.notifications.create({
+                type: 'basic',
+                iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+                title: 'SocialShield — Possible impersonation',
+                message: `${a.platform}/@${a.username} & ${b.platform}/@${b.username} share same profile pic`,
+                priority: 2,
+              });
+            } catch {}
+          }
+          seen[pairKey] = match.detectedAt;
+        }
+      }
+    }
+
+    await chrome.storage.local.set({ [seenKey]: seen });
+    return { compared: (profiles.length * (profiles.length - 1)) / 2, matches };
+  } catch (err) {
+    console.error('[SocialShield] Cross-profile pHash scan error:', err);
+    return { error: err.message };
+  }
+}
+
 // ==================== Message Handling ====================
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -845,6 +961,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'PRIVACY_SCAN_COMPLETE':
       handlePrivacyScanComplete(message.data);
+      // Sau mỗi privacy scan, profile snapshot mới đã được lưu → check ngay
+      // cross-profile pHash để bắt impersonation kịp thời.
+      runCrossProfilePHashScan().catch(() => {});
+      break;
+
+    case 'RUN_CROSS_PROFILE_PHASH_SCAN':
+      runCrossProfilePHashScan().then(result => sendResponse(result || { matches: [] }));
+      return true;
+
+    case 'APPS_PARSED':
+      // Just relay/log — content script đã lưu vào storage; có thể raise alert
+      // nếu apps count tăng đột biến vs lần trước (TODO).
       break;
 
     case 'LINK_SCAN_COMPLETE':
@@ -1096,6 +1224,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await runAutoCapture();
   } else if (alarm.name === 'footprint-monitor') {
     await runFootprintMonitor();
+    // Piggyback: cross-profile pHash diff sau mỗi run footprint monitor
+    await runCrossProfilePHashScan();
   }
 });
 

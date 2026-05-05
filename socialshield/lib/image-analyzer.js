@@ -438,6 +438,113 @@ const SocialShieldImageAnalyzer = {
   },
 
   /**
+   * Tính pHash 64-bit (DCT-based) từ ảnh.
+   * Tolerant với rotate nhỏ, crop nhẹ, color/brightness shift hơn aHash.
+   *
+   * Workflow: resize 32x32 → grayscale → 2D DCT-II → lấy 8x8 top-left
+   * (low-frequency) → median (bỏ DC ở [0,0]) → bit = (val > median).
+   *
+   * @param {HTMLImageElement|HTMLCanvasElement|Blob|string} input
+   * @returns {Promise<string>} 64-character binary string
+   */
+  async computePHash(input) {
+    let img;
+    if (typeof input === 'string') img = await this._urlToImage(input);
+    else if (input instanceof Blob) img = await this._blobToImage(input);
+    else if (input instanceof HTMLImageElement || input instanceof HTMLCanvasElement) img = input;
+    else throw new Error('Invalid input for computePHash');
+
+    const SIZE = 32;
+    const canvas = document.createElement('canvas');
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, SIZE, SIZE);
+    const data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+
+    const gray = new Float64Array(SIZE * SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const o = i * 4;
+      gray[i] = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2];
+    }
+
+    // Cache cosine table
+    const cos = this._dctCosTable(SIZE);
+
+    // 2D DCT-II: chỉ cần 8 hàng/cột đầu (low frequency), tiết kiệm 75% công việc.
+    const N = SIZE;
+    const KEEP = 8;
+    // Bước 1: row-wise DCT, chỉ giữ 8 column outputs đầu
+    const rowDct = new Float64Array(N * KEEP);
+    for (let y = 0; y < N; y++) {
+      for (let u = 0; u < KEEP; u++) {
+        let sum = 0;
+        for (let x = 0; x < N; x++) sum += gray[y * N + x] * cos[u * N + x];
+        rowDct[y * KEEP + u] = sum;
+      }
+    }
+    // Bước 2: column-wise DCT trên rowDct (chỉ KEEP cols), giữ KEEP outputs
+    const block = new Float64Array(KEEP * KEEP);
+    for (let v = 0; v < KEEP; v++) {
+      for (let u = 0; u < KEEP; u++) {
+        let sum = 0;
+        for (let y = 0; y < N; y++) sum += rowDct[y * KEEP + u] * cos[v * N + y];
+        block[v * KEEP + u] = sum;
+      }
+    }
+
+    // Bỏ DC component [0,0], lấy median 63 giá trị
+    const vals = [];
+    for (let i = 1; i < KEEP * KEEP; i++) vals.push(block[i]);
+    const sorted = [...vals].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+
+    let hash = '';
+    for (let i = 0; i < KEEP * KEEP; i++) hash += block[i] > median ? '1' : '0';
+    return hash;
+  },
+
+  _dctCosCache: null,
+  _dctCosTable(N) {
+    if (this._dctCosCache && this._dctCosCache.N === N) return this._dctCosCache.table;
+    const table = new Float64Array(N * N);
+    for (let k = 0; k < N; k++) {
+      for (let n = 0; n < N; n++) {
+        table[k * N + n] = Math.cos((Math.PI * (2 * n + 1) * k) / (2 * N));
+      }
+    }
+    this._dctCosCache = { N, table };
+    return table;
+  },
+
+  /**
+   * Compute cả aHash và pHash trong 1 lần. Convenience cho content scripts.
+   * @returns {Promise<{aHash: string, pHash: string}>}
+   */
+  async computeBothHashes(input) {
+    const [aHash, pHash] = await Promise.all([
+      this.computeAHash(input),
+      this.computePHash(input),
+    ]);
+    return { aHash, pHash };
+  },
+
+  /**
+   * So sánh 2 pHash. Ngưỡng nghiêm hơn aHash vì pHash robust hơn:
+   * <=6 / 64 = nearly identical, <=10 = similar.
+   */
+  comparePHashes(h1, h2) {
+    const d = this.hashDistance(h1, h2);
+    if (d < 0) return { distance: -1, similar: false, identical: false, similarity: 0 };
+    return {
+      distance: d,
+      identical: d <= 2,
+      similar: d <= 10,
+      similarity: 1 - d / 64,
+    };
+  },
+
+  /**
    * Hamming distance giữa 2 hash bitstring.
    * @returns {number} 0-64. <=8 = likely cùng 1 ảnh.
    */
@@ -462,6 +569,162 @@ const SocialShieldImageAnalyzer = {
     };
   },
 
+  // ==================== 6.5. Text Region Detection (no ML) ====================
+
+  /**
+   * Phát hiện vùng có khả năng chứa text trong ảnh bằng heuristic edge density.
+   * Workflow:
+   *   1. Resize về max 320px (giữ ratio) để xử lý nhanh
+   *   2. Grayscale + Sobel edge detection
+   *   3. Chia thành grid cells (16x16 px), tính tỷ lệ pixel edge mỗi cell
+   *   4. Cells có edge density cao + nằm cạnh nhau → merge thành text region
+   *
+   * Không cần ML/Tesseract; dùng tốt cho text in lớn (CCCD/screenshot/ID).
+   * False positive với hoa văn dày, false negative với text rất nhỏ.
+   *
+   * @param {HTMLImageElement|HTMLCanvasElement} source
+   * @param {Object} options - { minDensity: 0.18, cellSize: 16, mergeGap: 1 }
+   * @returns {Array<{x,y,w,h,density}>} Bounding boxes (theo pixel coords ảnh gốc)
+   */
+  detectTextRegions(source, options = {}) {
+    const { minDensity = 0.18, cellSize = 16, mergeGap = 1 } = options;
+
+    const origW = source.naturalWidth || source.width;
+    const origH = source.naturalHeight || source.height;
+    if (!origW || !origH) return [];
+
+    // Downscale
+    const MAX = 320;
+    const scale = Math.min(1, MAX / Math.max(origW, origH));
+    const w = Math.max(1, Math.round(origW * scale));
+    const h = Math.max(1, Math.round(origH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+
+    // Grayscale
+    const gray = new Uint8ClampedArray(w * h);
+    for (let i = 0; i < w * h; i++) {
+      const o = i * 4;
+      gray[i] = (0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]) | 0;
+    }
+
+    // Sobel — chỉ cần magnitude > threshold
+    const edge = new Uint8Array(w * h);
+    const TH = 50;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const tl = gray[(y - 1) * w + (x - 1)];
+        const tc = gray[(y - 1) * w + x];
+        const tr = gray[(y - 1) * w + (x + 1)];
+        const ml = gray[y * w + (x - 1)];
+        const mr = gray[y * w + (x + 1)];
+        const bl = gray[(y + 1) * w + (x - 1)];
+        const bc = gray[(y + 1) * w + x];
+        const br = gray[(y + 1) * w + (x + 1)];
+        const gx = -tl - 2 * ml - bl + tr + 2 * mr + br;
+        const gy = -tl - 2 * tc - tr + bl + 2 * bc + br;
+        edge[y * w + x] = (Math.abs(gx) + Math.abs(gy)) > TH ? 1 : 0;
+      }
+    }
+
+    // Cell grid
+    const cellsX = Math.ceil(w / cellSize);
+    const cellsY = Math.ceil(h / cellSize);
+    const density = new Float32Array(cellsX * cellsY);
+    for (let cy = 0; cy < cellsY; cy++) {
+      for (let cx = 0; cx < cellsX; cx++) {
+        let sum = 0, total = 0;
+        const x0 = cx * cellSize, y0 = cy * cellSize;
+        const x1 = Math.min(w, x0 + cellSize), y1 = Math.min(h, y0 + cellSize);
+        for (let y = y0; y < y1; y++) {
+          for (let x = x0; x < x1; x++) { sum += edge[y * w + x]; total++; }
+        }
+        density[cy * cellsX + cx] = total > 0 ? sum / total : 0;
+      }
+    }
+
+    // Mark hot cells (boolean grid)
+    const hot = new Uint8Array(cellsX * cellsY);
+    for (let i = 0; i < hot.length; i++) hot[i] = density[i] >= minDensity ? 1 : 0;
+
+    // Connected components (4-conn với gap merge)
+    const label = new Int32Array(cellsX * cellsY);
+    const regions = [];
+    let nextId = 1;
+    const stack = [];
+    for (let cy = 0; cy < cellsY; cy++) {
+      for (let cx = 0; cx < cellsX; cx++) {
+        const idx = cy * cellsX + cx;
+        if (!hot[idx] || label[idx]) continue;
+        stack.length = 0;
+        stack.push([cx, cy]);
+        label[idx] = nextId;
+        let minX = cx, maxX = cx, minY = cy, maxY = cy, count = 0, dSum = 0;
+        while (stack.length) {
+          const [px, py] = stack.pop();
+          count++;
+          dSum += density[py * cellsX + px];
+          if (px < minX) minX = px; if (px > maxX) maxX = px;
+          if (py < minY) minY = py; if (py > maxY) maxY = py;
+          for (let dy = -mergeGap; dy <= mergeGap; dy++) {
+            for (let dx = -mergeGap; dx <= mergeGap; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = px + dx, ny = py + dy;
+              if (nx < 0 || ny < 0 || nx >= cellsX || ny >= cellsY) continue;
+              const nIdx = ny * cellsX + nx;
+              if (hot[nIdx] && !label[nIdx]) { label[nIdx] = nextId; stack.push([nx, ny]); }
+            }
+          }
+        }
+        const widthCells = maxX - minX + 1;
+        const heightCells = maxY - minY + 1;
+        // Lọc region quá nhỏ hoặc quá vuông (text thường wide aspect)
+        if (count < 3) { nextId++; continue; }
+        regions.push({
+          x: Math.round((minX * cellSize) / scale),
+          y: Math.round((minY * cellSize) / scale),
+          w: Math.round((widthCells * cellSize) / scale),
+          h: Math.round((heightCells * cellSize) / scale),
+          density: dSum / count,
+          cells: count,
+        });
+        nextId++;
+      }
+    }
+
+    // Sort by area desc
+    regions.sort((a, b) => b.w * b.h - a.w * a.h);
+    return regions;
+  },
+
+  /**
+   * Vẽ pixelate/blur lên các vùng cho trước trên canvas.
+   */
+  _blurRegions(canvas, regions, strength = 12) {
+    const ctx = canvas.getContext('2d');
+    for (const r of regions) {
+      const x = Math.max(0, r.x), y = Math.max(0, r.y);
+      const w = Math.min(canvas.width - x, r.w);
+      const h = Math.min(canvas.height - y, r.h);
+      if (w <= 0 || h <= 0) continue;
+      // Pixelate: scale down then up
+      const sw = Math.max(1, Math.floor(w / strength));
+      const sh = Math.max(1, Math.floor(h / strength));
+      const tmp = document.createElement('canvas');
+      tmp.width = sw; tmp.height = sh;
+      const tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = false;
+      tctx.drawImage(canvas, x, y, w, h, 0, 0, sw, sh);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tmp, 0, 0, sw, sh, x, y, w, h);
+      ctx.imageSmoothingEnabled = true;
+    }
+  },
+
   // ==================== 6. Safe Image Generator (PoC PII auto-blur) ====================
 
   /**
@@ -475,7 +738,7 @@ const SocialShieldImageAnalyzer = {
    * @returns {Promise<{blob, info}>}
    */
   async generateSafeImage(input, options = {}) {
-    const { blurQR = true, jpegQuality = 0.85 } = options;
+    const { blurQR = true, blurText = false, jpegQuality = 0.85, textMinDensity = 0.18 } = options;
 
     let img;
     if (input instanceof Blob) img = await this._blobToImage(input);
@@ -488,9 +751,11 @@ const SocialShieldImageAnalyzer = {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
 
-    const info = { exifStripped: true, qrCovered: false, idCardWarning: false };
+    const info = { exifStripped: true, qrCovered: false, idCardWarning: false, textRegionsBlurred: 0 };
 
-    // QR detect & cover
+    // Bước 1: QR detect TRƯỚC (trên ảnh sạch) để text-blur không phá QR finder pattern.
+    // Chỉ ghi nhớ vị trí QR, chưa vẽ che — để sau text blur mới cover (giữ thứ tự visual đúng).
+    let qrBox = null;
     if (blurQR && (await this.loadJsQR().catch(() => false))) {
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const code = window.jsQR(imageData.data, imageData.width, imageData.height);
@@ -503,20 +768,55 @@ const SocialShieldImageAnalyzer = {
         ];
         const xs = corners.map(c => c.x);
         const ys = corners.map(c => c.y);
-        const x0 = Math.max(0, Math.min(...xs) - 8);
-        const y0 = Math.max(0, Math.min(...ys) - 8);
-        const x1 = Math.min(canvas.width, Math.max(...xs) + 8);
-        const y1 = Math.min(canvas.height, Math.max(...ys) + 8);
-        ctx.fillStyle = '#000';
-        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-        // Stamp warning text
-        ctx.fillStyle = '#fff';
-        ctx.font = `${Math.max(12, (x1 - x0) / 12)}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.fillText('[QR removed]', (x0 + x1) / 2, (y0 + y1) / 2);
-        info.qrCovered = true;
-        info.qrData = code.data?.substring(0, 100);
+        qrBox = {
+          x0: Math.max(0, Math.min(...xs) - 8),
+          y0: Math.max(0, Math.min(...ys) - 8),
+          x1: Math.min(canvas.width, Math.max(...xs) + 8),
+          y1: Math.min(canvas.height, Math.max(...ys) + 8),
+          data: code.data,
+        };
       }
+    }
+
+    // Bước 2: Text region blur — exclude vùng QR (nếu có) khỏi danh sách regions để
+    // tránh pixelate QR trông như text region.
+    if (blurText) {
+      try {
+        let regions = this.detectTextRegions(img, { minDensity: textMinDensity });
+        if (qrBox) {
+          regions = regions.filter(r => {
+            // Bỏ region nào overlap >50% với QR box
+            const ix0 = Math.max(r.x, qrBox.x0);
+            const iy0 = Math.max(r.y, qrBox.y0);
+            const ix1 = Math.min(r.x + r.w, qrBox.x1);
+            const iy1 = Math.min(r.y + r.h, qrBox.y1);
+            const iw = Math.max(0, ix1 - ix0), ih = Math.max(0, iy1 - iy0);
+            const inter = iw * ih;
+            const rArea = r.w * r.h;
+            return rArea === 0 || inter / rArea < 0.5;
+          });
+        }
+        if (regions.length) {
+          this._blurRegions(canvas, regions, 14);
+          info.textRegionsBlurred = regions.length;
+          info.textRegions = regions.slice(0, 20);
+        }
+      } catch (err) {
+        info.textBlurError = err.message;
+      }
+    }
+
+    // Bước 3: Cover QR (vẽ rectangle đen + stamp) sau cùng để chắc chắn không bị blur de
+    if (qrBox) {
+      const { x0, y0, x1, y1 } = qrBox;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.fillStyle = '#fff';
+      ctx.font = `${Math.max(12, (x1 - x0) / 12)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('[QR removed]', (x0 + x1) / 2, (y0 + y1) / 2);
+      info.qrCovered = true;
+      info.qrData = qrBox.data?.substring(0, 100);
     }
 
     // Check ID card heuristic → warn (không tự crop)

@@ -1560,20 +1560,29 @@ const SocialShieldScanner = {
 
         // 6. Perceptual hash matching — bằng chứng mạnh nhất khi user upload
         // cùng ảnh lên 2 platform (URL khác nhau, hash giống).
-        if (a.profilePicHash && b.profilePicHash) {
-          const cmp = (typeof SocialShieldImageAnalyzer !== 'undefined')
-            ? SocialShieldImageAnalyzer.compareHashes(a.profilePicHash, b.profilePicHash)
-            : null;
-          if (cmp) {
-            if (cmp.identical) {
-              signals.push({ type: 'identical_profile_pic_hash', weight: 70,
-                detail: `Identical profile picture (aHash match)` });
-              pairScore += 70;
-            } else if (cmp.similar) {
-              signals.push({ type: 'similar_profile_pic_hash', weight: 50,
-                detail: `Very similar profile picture (Hamming distance ${cmp.distance}/64)` });
-              pairScore += 50;
-            }
+        // Ưu tiên pHash (DCT) vì tolerant với crop/rotate; fallback aHash.
+        const ia = (typeof SocialShieldImageAnalyzer !== 'undefined') ? SocialShieldImageAnalyzer : null;
+        if (ia && a.profilePicPHash && b.profilePicPHash) {
+          const cmp = ia.comparePHashes(a.profilePicPHash, b.profilePicPHash);
+          if (cmp.identical) {
+            signals.push({ type: 'identical_profile_pic_phash', weight: 70,
+              detail: `Identical profile picture (pHash distance ${cmp.distance}/64)` });
+            pairScore += 70;
+          } else if (cmp.similar) {
+            signals.push({ type: 'similar_profile_pic_phash', weight: 55,
+              detail: `Very similar profile picture (pHash distance ${cmp.distance}/64)` });
+            pairScore += 55;
+          }
+        } else if (ia && a.profilePicHash && b.profilePicHash) {
+          const cmp = ia.compareHashes(a.profilePicHash, b.profilePicHash);
+          if (cmp.identical) {
+            signals.push({ type: 'identical_profile_pic_hash', weight: 70,
+              detail: `Identical profile picture (aHash match)` });
+            pairScore += 70;
+          } else if (cmp.similar) {
+            signals.push({ type: 'similar_profile_pic_hash', weight: 50,
+              detail: `Very similar profile picture (aHash distance ${cmp.distance}/64)` });
+            pairScore += 50;
           }
         }
 

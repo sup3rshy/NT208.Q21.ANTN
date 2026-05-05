@@ -120,6 +120,10 @@
             <span class="ss-fab-action-icon">⚙️</span>
             <span>Audit Privacy Settings</span>
           </button>
+          <button class="ss-fab-action" data-action="parse-apps-page">
+            <span class="ss-fab-action-icon">🚪</span>
+            <span>Parse Connected Apps</span>
+          </button>
         </div>
       `;
       document.body.appendChild(fab);
@@ -192,7 +196,25 @@
         case 'audit-privacy-settings':
           await this.runPrivacyAudit();
           break;
+
+        case 'parse-apps-page':
+          await this.runAppsParse();
+          break;
       }
+    },
+
+    async runAppsParse() {
+      if (!location.pathname.includes('connected_apps')) {
+        this.notify('Open X Settings → Apps and sessions → Connected apps first.', 'warning');
+        return;
+      }
+      const apps = SocialShieldPrivacyAuditor.parseAppsPage();
+      const assess = SocialShieldPrivacyAuditor.assessApps(apps);
+      const data = { platform: 'twitter', apps, assessment: assess, capturedAt: new Date().toISOString(), url: location.href };
+      await SocialShieldStorage.set('connected_apps_twitter', data);
+      this.notify(`Found ${apps.length} connected app(s) — risk: ${assess.risk}. Open dashboard for details.`,
+        assess.risk === 'high' ? 'warning' : 'success');
+      chrome.runtime.sendMessage({ type: 'APPS_PARSED', data });
     },
 
     // ==================== Capture Logic ====================
@@ -261,13 +283,14 @@
           try {
             const userInfo = await this.fetchUserInfo(profile);
             if (userInfo) {
-              // aHash của profile pic — dùng cho cross-platform linkage detection
-              let profilePicHash = null;
+              // aHash + pHash của profile pic — dùng cho cross-platform linkage detection
+              let profilePicHash = null, profilePicPHash = null;
               if (userInfo.profile_image_url_https) {
                 try {
                   // Twitter trả normal_400x400 — dùng full size để hash chính xác hơn
                   const fullPic = userInfo.profile_image_url_https.replace(/_normal\.(jpe?g|png)/i, '.$1');
-                  profilePicHash = await SocialShieldImageAnalyzer.computeAHash(fullPic);
+                  const both = await SocialShieldImageAnalyzer.computeBothHashes(fullPic);
+                  profilePicHash = both.aHash; profilePicPHash = both.pHash;
                 } catch (e) { /* CORS/load fail — ignore */ }
               }
 
@@ -276,6 +299,7 @@
                 bio: userInfo.description || '',
                 profilePicUrl: userInfo.profile_image_url_https || '',
                 profilePicHash,
+                profilePicPHash,
                 externalUrl: userInfo.url || userInfo.entities?.url?.urls?.[0]?.expanded_url || '',
                 isPrivate: !!userInfo.protected,
                 isVerified: !!userInfo.verified || !!userInfo.is_blue_verified,
@@ -721,10 +745,11 @@
           linkage = SocialShieldScanner.detectCrossPlatformLinkage([
             { platform: 'twitter', username: profile, displayName: twDisplayName,
               bio: bioText, externalUrl: profileData.externalUrl,
-              profilePicHash: null /* sẽ được set khi profile snapshot lưu lần sau */ },
+              profilePicHash: null, profilePicPHash: null /* sẽ set khi snapshot lưu lần sau */ },
             { platform: 'instagram', username: profile, displayName: igLatest.displayName,
               bio: igLatest.bio, profilePicUrl: igLatest.profilePicUrl,
               profilePicHash: igLatest.profilePicHash,
+              profilePicPHash: igLatest.profilePicPHash,
               externalUrl: igLatest.externalUrl },
           ]);
         }

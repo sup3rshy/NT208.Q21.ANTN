@@ -371,6 +371,9 @@
               <input type="file" class="ss-input" id="tool-image-input" accept="image/*" style="flex: 1; min-width: 200px;">
               <button class="ss-btn ss-btn-primary" id="btn-tool-image-scan">Scan</button>
               <button class="ss-btn" id="btn-tool-image-safe" title="Strip EXIF + cover QR + downloadable safe version">🛡️ Generate safe version</button>
+              <label style="display:flex; align-items:center; gap:4px; font-size:12px; color: var(--text-secondary);">
+                <input type="checkbox" id="tool-image-blur-text"> Auto-blur text regions (heuristic)
+              </label>
             </div>
             <div id="tool-image-result"></div>
           </div>
@@ -402,7 +405,9 @@
             <div style="display: flex; gap: 8px; margin-bottom: 12px;">
               <input type="text" class="ss-input" id="tool-geo-username" placeholder="Instagram username (đã chạy Privacy Scan trước)" style="flex: 1;">
               <button class="ss-btn ss-btn-primary" id="btn-tool-geo-load">Load</button>
+              <button class="ss-btn" id="btn-tool-geo-heatmap" title="Geocode + render heatmap (cần network lần đầu, dùng OSM Nominatim)">🗺️ Heatmap</button>
             </div>
+            <canvas id="tool-geo-canvas" width="700" height="380" style="width:100%; max-width:700px; display:none; border-radius:6px; margin-bottom:8px;"></canvas>
             <div id="tool-geo-result"></div>
           </div>
         </div>
@@ -423,6 +428,13 @@
             </div>
             <div style="margin-top: 12px; padding: 8px; background: rgba(255,255,255,0.04); border-radius: 4px; font-size: 12px; color: var(--text-secondary);">
               <b>Quick checklist:</b> revoke app nếu (1) không dùng &gt;6 tháng, (2) scope quá rộng (read+write all), (3) bạn không nhận ra tên app, (4) app từ developer đã shut down.
+            </div>
+            <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);">
+              <div style="font-size: 13px; margin-bottom: 8px;">
+                <b>Parsed apps</b> — chạy "Parse Connected Apps" từ FAB ở IG/X settings page để extract list. Reload page này để refresh.
+              </div>
+              <button class="ss-btn ss-btn-sm" id="btn-apps-load">🔄 Load latest</button>
+              <div id="apps-parsed-result" style="margin-top: 10px;"></div>
             </div>
           </div>
         </div>
@@ -451,6 +463,20 @@
               <button class="ss-btn" id="btn-tool-fpmon-run">Run now</button>
             </div>
             <div id="tool-fpmon-result"></div>
+          </div>
+        </div>
+
+        <div class="ss-card">
+          <div class="ss-card-header"><h2>🪞 Cross-Profile pHash Diff</h2></div>
+          <div class="ss-card-body">
+            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
+              So sánh profile pic (pHash DCT) giữa tất cả profiles bạn đã track. Phát hiện:
+              <br>(1) <b>Impersonation</b>: 2 account khác username trên cùng platform dùng giống ảnh.
+              <br>(2) <b>Cross-platform reuse</b>: cùng người dùng cùng ảnh ở IG + X (linkage signal).
+              <br>Auto-run sau mỗi privacy scan + theo footprint monitor alarm. Nhấn nút để chạy ngay:
+            </p>
+            <button class="ss-btn ss-btn-primary" id="btn-tool-phash-scan">🔍 Scan now</button>
+            <div id="tool-phash-result" style="margin-top: 12px;"></div>
           </div>
         </div>
 
@@ -887,6 +913,7 @@
   <script src="../lib/diff.js"></script>
   <script src="../lib/scanner.js"></script>
   <script src="../lib/image-analyzer.js"></script>
+  <script src="../lib/heatmap.js"></script>
   <script src="../lib/text-analyzer.js"></script>
   <script src="dashboard.js"></script>
 </body>

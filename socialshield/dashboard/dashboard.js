@@ -1447,16 +1447,17 @@
         const out = document.getElementById('tool-image-result');
         const file = document.getElementById('tool-image-input').files?.[0];
         if (!file) { alert('Choose an image first'); return; }
-        const status = document.createElement('div');
-        status.style.cssText = 'margin-top: 12px; padding: 10px; background: rgba(255,255,255,0.04); border-radius: 4px;';
-        status.innerHTML = '<div style="color: var(--text-secondary);">⏳ Generating safe version...</div>';
-        out.appendChild(status);
+        // Replace, không append — tránh stacking khi user click nhiều lần
+        out.innerHTML = '<div id="safe-image-status" style="margin-top: 12px; padding: 10px; background: rgba(255,255,255,0.04); border-radius: 4px;"><div style="color: var(--text-secondary);">⏳ Generating safe version...</div></div>';
+        const status = out.querySelector('#safe-image-status');
         try {
-          const { blob, info } = await SocialShieldImageAnalyzer.generateSafeImage(file);
+          const blurText = document.getElementById('tool-image-blur-text')?.checked || false;
+          const { blob, info } = await SocialShieldImageAnalyzer.generateSafeImage(file, { blurText });
           const url = URL.createObjectURL(blob);
           let html = '<h3 style="margin: 0 0 8px;">🛡️ Safe version ready</h3><ul style="margin: 0; padding-left: 18px;">';
           if (info.exifStripped) html += '<li>EXIF metadata stripped (GPS, camera, datetime removed)</li>';
           if (info.qrCovered) html += `<li style="color: orange;">QR code covered (data was: <code style="font-size: 10px;">${this._escapeHtml((info.qrData || '').substring(0, 50))}...</code>)</li>`;
+          if (info.textRegionsBlurred) html += `<li style="color: orange;">Blurred ${info.textRegionsBlurred} text region(s) (heuristic edge-density detection — verify visually).</li>`;
           if (info.idCardWarning) html += `<li style="color: var(--danger);">⚠ Image looks like ID card (confidence ${Math.round(info.idCardConfidence * 100)}%) — KHÔNG tự crop, bạn nên KHÔNG đăng ảnh này.</li>`;
           html += '</ul>';
           html += `<div style="margin-top: 10px;"><a href="${url}" download="safe_${file.name.replace(/\.\w+$/, '')}.jpg" class="ss-btn ss-btn-primary" style="display: inline-block; padding: 8px 14px;">⬇ Download safe image</a></div>`;
@@ -1529,6 +1530,62 @@
         }
       });
 
+      // ============= Geo Heatmap render =============
+      document.getElementById('btn-tool-geo-heatmap').addEventListener('click', async () => {
+        const username = document.getElementById('tool-geo-username').value.trim();
+        const out = document.getElementById('tool-geo-result');
+        const canvas = document.getElementById('tool-geo-canvas');
+        if (!username) { out.innerHTML = '<div style="color:var(--danger);">Enter username</div>'; return; }
+        if (typeof SocialShieldHeatmap === 'undefined') {
+          out.innerHTML = '<div style="color:var(--danger);">Heatmap lib not loaded</div>'; return;
+        }
+
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Fetching profile + locations...</div>';
+        try {
+          const info = await chrome.runtime.sendMessage({ type: 'FETCH_PROFILE_INFO', username });
+          const posts = (info && info.recentPosts) || [];
+          const withLoc = posts.filter(p => p.location);
+          if (withLoc.length === 0) {
+            out.innerHTML = '<div style="color: var(--accent);">✓ No location-tagged posts. Nothing to plot.</div>';
+            canvas.style.display = 'none';
+            return;
+          }
+          // Cluster by name
+          const cluster = {};
+          for (const p of withLoc) {
+            cluster[p.location] = (cluster[p.location] || 0) + 1;
+          }
+          const names = Object.keys(cluster);
+          out.innerHTML = `<div style="color: var(--text-secondary);">⏳ Geocoding ${names.length} location(s) via OSM Nominatim (~1s each, cached)...</div>`;
+
+          const geocoded = await SocialShieldHeatmap.geocodeBatch(names, (done, total) => {
+            out.innerHTML = `<div style="color: var(--text-secondary);">⏳ Geocoding ${done}/${total}...</div>`;
+          });
+
+          const points = geocoded
+            .filter(g => g.coord)
+            .map(g => ({ name: g.name, lat: g.coord.lat, lng: g.coord.lng, count: cluster[g.name] }));
+
+          canvas.style.display = 'block';
+          SocialShieldHeatmap.render(canvas, points);
+
+          const failed = geocoded.filter(g => !g.coord).length;
+          let html = `<div style="font-size:13px; margin-top:8px;"><b>${points.length}</b>/${names.length} locations plotted${failed ? ` (<span style="color:var(--text-secondary);">${failed} failed to geocode</span>)` : ''}.</div>`;
+          if (points.length) {
+            const top = [...points].sort((a, b) => b.count - a.count).slice(0, 5);
+            html += '<div style="font-size:12px; color:var(--text-secondary); margin-top:6px;">Top: ' +
+              top.map(t => `${this._escapeHtml(t.name)} (${t.count}×)`).join(', ') + '</div>';
+            const span = this._geoSpanKm(points);
+            if (span < 30 && points.length >= 3) {
+              html += `<div style="margin-top:10px; padding:10px; background: rgba(239,68,68,0.1); border-left: 3px solid var(--danger); border-radius:4px; font-size:13px;">⚠ Tất cả locations cluster trong bán kính ~${span.toFixed(1)}km → khả năng cao là khu vực sống/làm việc thường xuyên.</div>`;
+            }
+          }
+          out.innerHTML = html;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      });
+
       // ============= Apps Revocation Helper =============
       const openTab = (url) => chrome.tabs.create({ url });
       document.getElementById('btn-revoke-ig').addEventListener('click', () =>
@@ -1541,6 +1598,87 @@
         openTab('https://www.facebook.com/settings/?tab=business_tools'));
       document.getElementById('btn-revoke-github').addEventListener('click', () =>
         openTab('https://github.com/settings/applications'));
+
+      // ============= Parsed Apps loader =============
+      const loadParsedApps = async () => {
+        const out = document.getElementById('apps-parsed-result');
+        if (!out) return;
+        try {
+          const ig = await SocialShieldStorage.get('connected_apps_instagram');
+          const tw = await SocialShieldStorage.get('connected_apps_twitter');
+          const sections = [];
+          for (const [label, data] of [['📷 Instagram', ig], ['🐦 X / Twitter', tw]]) {
+            if (!data || !data.apps) continue;
+            const apps = data.apps;
+            const a = data.assessment || {};
+            const riskColor = a.risk === 'high' ? 'var(--danger)' : a.risk === 'medium' ? 'orange' : 'var(--accent)';
+            let html = `<div style="margin-top:8px; padding:10px; border:1px solid var(--border); border-radius:6px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <b>${label}</b>
+                <span style="font-size:11px; color:var(--text-secondary);">captured ${this._formatTime(data.capturedAt)}</span>
+              </div>
+              <div style="font-size:12px; color:${riskColor}; margin-bottom:8px;">
+                <b>${apps.length}</b> apps · risk: <b>${a.risk || 'unknown'}</b>${a.writeScope ? ` · ${a.writeScope} with write scope` : ''}
+              </div>`;
+            if (apps.length === 0) {
+              html += '<div style="color:var(--text-secondary); font-size:12px;">No apps parsed (DOM may have changed; try again or check page).</div>';
+            } else {
+              html += '<table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr style="border-bottom:1px solid var(--border);">'
+                + '<th style="text-align:left;padding:4px;">App</th><th style="text-align:left;padding:4px;">Status / Scope</th></tr></thead><tbody>';
+              for (const app of apps.slice(0, 60)) {
+                const meta = app.lastUsed || app.scope || app.status || '-';
+                html += `<tr><td style="padding:4px;">${this._escapeHtml(app.name)}</td><td style="padding:4px; color:var(--text-secondary);">${this._escapeHtml(String(meta))}</td></tr>`;
+              }
+              html += '</tbody></table>';
+              if (apps.length > 60) html += `<div style="font-size:11px; color:var(--text-secondary); margin-top:4px;">+${apps.length - 60} more...</div>`;
+              if (a.recommendation) html += `<div style="margin-top:8px; padding:6px; background:rgba(255,255,255,0.04); border-radius:4px; font-size:12px;">💡 ${this._escapeHtml(a.recommendation)}</div>`;
+            }
+            html += '</div>';
+            sections.push(html);
+          }
+          out.innerHTML = sections.length
+            ? sections.join('')
+            : '<div style="color:var(--text-secondary); font-size:13px;">No parsed apps yet. Click "Parse Connected Apps" from FAB on IG/X settings page first.</div>';
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      };
+      document.getElementById('btn-apps-load').addEventListener('click', loadParsedApps);
+      loadParsedApps(); // auto-load lần đầu khi mở Tools
+
+      // ============= Cross-profile pHash scan =============
+      document.getElementById('btn-tool-phash-scan').addEventListener('click', async () => {
+        const out = document.getElementById('tool-phash-result');
+        out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Comparing pHash across all tracked profiles...</div>';
+        try {
+          const res = await chrome.runtime.sendMessage({ type: 'RUN_CROSS_PROFILE_PHASH_SCAN' });
+          if (!res || res.error) {
+            out.innerHTML = `<div style="color:var(--danger);">Error: ${res?.error || 'no response'}</div>`;
+            return;
+          }
+          const matches = res.matches || [];
+          let html = `<div style="font-size:13px; margin-bottom:8px;">Compared <b>${res.compared || 0}</b> pair(s). Matches: <b>${matches.length}</b>.</div>`;
+          if (matches.length === 0) {
+            html += '<div style="color: var(--accent); font-size:13px;">✓ No suspicious profile-pic similarities. All tracked profiles look distinct.</div>';
+          } else {
+            html += '<table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr style="border-bottom:1px solid var(--border);">'
+              + '<th style="text-align:left;padding:6px;">Severity</th><th style="text-align:left;padding:6px;">Pair</th><th style="text-align:left;padding:6px;">Distance</th><th style="text-align:left;padding:6px;">Reason</th></tr></thead><tbody>';
+            const sevColor = { high: 'var(--danger)', medium: 'orange', low: 'var(--text-secondary)' };
+            for (const m of matches) {
+              html += `<tr>
+                <td style="padding:6px; color:${sevColor[m.severity]}; font-weight:600;">${m.severity.toUpperCase()}</td>
+                <td style="padding:6px;">${m.a.platform}/@${this._escapeHtml(m.a.username)} ↔ ${m.b.platform}/@${this._escapeHtml(m.b.username)}</td>
+                <td style="padding:6px;">${m.distance}/64</td>
+                <td style="padding:6px; color: var(--text-secondary);">${this._escapeHtml(m.label)}</td>
+              </tr>`;
+            }
+            html += '</tbody></table>';
+          }
+          out.innerHTML = html;
+        } catch (err) {
+          out.innerHTML = `<div style="color:var(--danger);">Error: ${this._escapeHtml(err.message)}</div>`;
+        }
+      });
 
       // Password Pwned check (via service worker, k-anonymity)
       document.getElementById('btn-tool-pwd-check').addEventListener('click', async () => {
@@ -1568,6 +1706,34 @@
     _escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, c =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    },
+
+    _formatTime(iso) {
+      if (!iso) return '?';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString();
+    },
+
+    _geoSpanKm(points) {
+      if (!points || points.length < 2) return 0;
+      const haversine = (a, b) => {
+        const R = 6371;
+        const toRad = d => (d * Math.PI) / 180;
+        const dLat = toRad(b.lat - a.lat);
+        const dLng = toRad(b.lng - a.lng);
+        const h = Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+        return R * 2 * Math.asin(Math.sqrt(h));
+      };
+      let max = 0;
+      for (let i = 0; i < points.length; i++) {
+        for (let j = i + 1; j < points.length; j++) {
+          const d = haversine(points[i], points[j]);
+          if (d > max) max = d;
+        }
+      }
+      return max;
     },
 
     async _renderReverseSearchHint(report) {

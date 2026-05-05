@@ -178,6 +178,10 @@ socialshield/
 │   ├── scanner.js               # Privacy/Link/Footprint/Linkage/Doxxing engines + VN-specific patterns
 │   ├── diff.js                  # Snapshot diff + 8-signal bot detection
 │   ├── text-analyzer.js         # AI + 20+ rule-based scam patterns
+│   ├── image-analyzer.js        # EXIF + QR + CCCD heuristic + aHash + pHash (DCT) + text-region blur
+│   ├── privacy-auditor.js       # IG/X settings auditor + Connected Apps DOM parser
+│   ├── heatmap.js               # Canvas heatmap renderer + OSM Nominatim geocode cache
+│   ├── jsQR.min.js              # bundled local (130KB) cho VietQR decode
 │   └── chart.min.js
 ├── dashboard/
 │   ├── dashboard.html           # 8 pages: Overview, Snapshots, Compare, Privacy, Security, Tools, Doxxing, Alerts, Settings
@@ -251,12 +255,13 @@ Open Dashboard → tab **Tools**:
 - **Text PII Scanner** — paste bất kỳ text (bio, message, file...)
 - **Email Breach Check** — input email
 - **Password Pwned Check** — input password (k-anonymity, không lưu)
-- **Image Privacy Scanner** — chọn file ảnh, quét EXIF GPS + VietQR + CCCD heuristic, **+ Generate safe version** (strip EXIF + cover QR)
+- **Image Privacy Scanner** — chọn file ảnh, quét EXIF GPS + VietQR + CCCD heuristic, **+ Generate safe version** (strip EXIF + cover QR + optional text-region auto-blur)
 - **Reverse Image Search** — paste URL ảnh → mở Google Lens / Yandex / TinEye / Bing
-- **Geo Pattern Heatmap** — input IG username → cluster locations từ recent posts + cảnh báo "nơi sống"
-- **Connected Apps Revocation** — deep-links tới settings page của 5 platform lớn
+- **Geo Pattern Heatmap** — input IG username → cluster locations + **🗺️ Heatmap render** (Canvas + OSM geocode)
+- **Connected Apps Revocation** — deep-links 5 platform + parsed app list (FAB "Parse Connected Apps")
 - **Footprint Monitor** — config danh sách username + interval cho background monitoring
 - **Privacy Audit Viewer** — xem report mới nhất từ FAB IG/X audit
+- **🪞 Cross-Profile pHash Diff** — quét impersonation/reuse giữa tất cả profiles đã track
 
 ### Doxxing Risk
 Open Dashboard → tab **Doxxing Risk**:
@@ -353,21 +358,25 @@ Output: Privacy Posture score 0-100 + findings categorized (visibility/tracking/
 
 ---
 
-### 15. Perceptual Hash (aHash) Cross-Platform Match
-- `computeAHash(image)` — resize 8×8 grayscale → 64-bit bitstring
-- Hamming distance threshold: 0 = identical, ≤8 = "very likely same image"
-- Tự động compute khi `saveProfileSnapshot` chạy trên IG/X — lưu vào snapshot history
-- `detectCrossPlatformLinkage` thêm 2 signal mới: `identical_profile_pic_hash` (+70), `similar_profile_pic_hash` (+50). Đây là bằng chứng mạnh nhất xác định cùng 1 người dù URL khác nhau (CDN khác).
+### 15. Perceptual Hash (aHash + pHash) Cross-Platform Match
+- **aHash** (`computeAHash`) — resize 8×8 grayscale → 64-bit bitstring. Nhanh, OK cho exact-match.
+- **pHash DCT** (`computePHash`) — resize 32×32 grayscale → 2D DCT-II (chỉ lấy 8×8 low-freq) → median-based 64-bit. Tolerant hơn aHash với rotate nhỏ, crop nhẹ, brightness shift.
+- Cosine table cached, chỉ compute KEEP=8 row/col của DCT → nhanh ~75% so với full 32×32.
+- `computeBothHashes()` trả về `{aHash, pHash}` 1 lần. Content scripts IG/X tự động lưu cả 2 vào snapshot history (`profilePicHash` + `profilePicPHash`).
+- `detectCrossPlatformLinkage` ưu tiên pHash khi present (+70 identical pHash, +55 similar), fallback aHash. Thresholds pHash: ≤2 identical, ≤10 similar (nghiêm hơn aHash vì pHash robust hơn).
 
 ### 16. Reverse Image Search Shortcuts
 - Tools card: paste URL ảnh → 4 button mở **Google Lens / Yandex / TinEye / Bing**
 - Ngay trong Doxxing Report detail: hiển thị link reverse search profile pic của target
 - Yandex thường tốt nhất cho face match (kinh nghiệm OSINT)
 
-### 17. Geo Pattern Heatmap
+### 17. Geo Pattern Heatmap (Canvas, no Leaflet)
 - Tools card: input username (đã quét trên IG) → fetch `recentPosts` từ background, cluster theo `location.name`
 - Bảng ranked: location + count + link Google Maps
 - Cảnh báo nếu 1 location ≥3 lần (= "nơi sống/làm việc" → stalking risk)
+- **🗺️ Heatmap render** (`lib/heatmap.js`): geocode mỗi location qua **OSM Nominatim** (rate-limit 1.1s/req, cache permanent vào `chrome.storage.local`). Mercator projection lên canvas 700×380, radial-gradient heat blobs (yellow→orange→red theo intensity), top-3 labels overlay, auto-fit bounds + padding.
+- Span radius warning: nếu tất cả locations cluster trong <30 km → flag "khu vực sống/làm việc thường xuyên" (Haversine pairwise max).
+- Zero external library — không cần Leaflet binary; Nominatim host_permission đã thêm vào manifest.
 
 ### 18. Safe Image Generator (PoC PII auto-blur)
 - Tools card: button **"Generate safe version"** trên image scanner
@@ -375,7 +384,8 @@ Output: Privacy Posture score 0-100 + findings categorized (visibility/tracking/
   - Re-encode JPEG qua Canvas → tự động strip toàn bộ EXIF (GPS, camera, datetime)
   - Detect QR code (jsQR) → vẽ rectangle đen che + stamp "[QR removed]"
   - CCCD heuristic: chỉ cảnh báo, KHÔNG tự crop (để user tự quyết định)
-  - Output: download link + preview ảnh đã clean
+  - **Auto text-region blur** (toggle checkbox): heuristic Sobel edge density grid → connected components → pixelate text-like vùng. No ML, no Tesseract — đủ cho text in lớn (CCCD, screenshot, ID). Tham số: `minDensity 0.18`, `cellSize 16`, pixelate strength 14.
+  - Output: download link + preview ảnh đã clean + count regions blurred
 
 ### 19. Connected Apps Revocation Helper
 - Tools card với 5 deep-link buttons:
@@ -386,17 +396,36 @@ Output: Privacy Posture score 0-100 + findings categorized (visibility/tracking/
   - 🐙 GitHub authorized apps
 - Quick checklist: revoke nếu app không dùng >6 tháng / scope quá rộng / không nhận ra tên / developer đã shut down
 - Extension không tự revoke (cần user click) nhưng deep-link rút ngắn workflow
+- **Apps page parser** (FAB action "🚪 Parse Connected Apps" trên IG/X settings): `parseAppsPage()` extract list app từ DOM (name + lastUsed/scope/status), tolerant với layout đổi. Lưu vào `connected_apps_<platform>`. `assessApps()` cho risk score (high nếu >10 apps hoặc >3 write-scope). Dashboard auto-load list dạng table khi mở Tools.
+
+### 20. Cross-Profile pHash Diff (Background Impersonation Detector)
+- `runCrossProfilePHashScan()` trong service-worker: walk tất cả `profile_*` keys, so sánh pHash pairwise.
+- Severity rules:
+  - **High** — same platform + khác username + pHash dist ≤10 → khả năng impersonation
+  - **Medium** — khác platform + khác username + pHash giống → đáng nghi
+  - **Low** — khác platform + cùng username + pHash giống → likely your own account (cross-platform reuse)
+- Auto-trigger: sau mỗi `PRIVACY_SCAN_COMPLETE` + sau mỗi alarm `footprint-monitor`.
+- Manual trigger: Tools card **"🪞 Cross-Profile pHash Diff"** → button "Scan now" gửi message `RUN_CROSS_PROFILE_PHASH_SCAN`.
+- De-dupe pair-key qua `phash_diff_seen_pairs` để không spam alert. High severity → chrome.notifications popup.
 
 ---
 
 ## Roadmap
 
-(Tất cả features ban đầu đã ship — đề xuất hướng phát triển tiếp:)
-- [ ] pHash thay aHash (DCT-based, tolerant với rotate/crop nhỏ)
-- [ ] Real heatmap với Leaflet local (no CDN, ~40KB)
-- [ ] Auto-detect text region trong ảnh để blur (cần lightweight ML)
-- [ ] Revocation count parser cho IG/X/GitHub apps page (qua content script)
-- [ ] Background pHash diff: alert khi profile pic giống ai đó nổi tiếng (impersonation từ phía mình)
+✅ **Đã hoàn thành (v1.1):**
+- [x] pHash thay aHash (DCT 32×32, KEEP=8 low-freq, median-based) — `lib/image-analyzer.js::computePHash`
+- [x] Real heatmap (Canvas + OSM Nominatim geocode + Mercator projection, no Leaflet binary) — `lib/heatmap.js`
+- [x] Auto-detect text region để blur (Sobel edge density + connected components, no ML) — `detectTextRegions` + safe-image checkbox
+- [x] Apps page parser cho IG/X (DOM scrape qua content script) — `parseAppsPage` + FAB action + dashboard table
+- [x] Background pHash diff: alert khi profile pic giống profile khác (impersonation detector) — `runCrossProfilePHashScan`
+
+🔜 **Đề xuất tiếp theo:**
+- [ ] OCR thực sự work trong MV3 (cần WASM bundle cho Tesseract → workaround filesystem hoặc OffscreenCanvas + remote worker policy)
+- [ ] Heatmap pan/zoom + click-to-Maps overlay
+- [ ] Text-region detector dựa trên MSER hoặc lightweight CRNN export sang ONNX runtime web
+- [ ] GitHub connected apps DOM parser (cùng pattern với IG/X)
+- [ ] Apps count delta alert (so với lần parse trước → app mới xuất hiện = phải review)
+- [ ] pHash diff ngược: build "celebrity reference set" để cảnh báo khi user upload ảnh giống public figure
 
 ---
 

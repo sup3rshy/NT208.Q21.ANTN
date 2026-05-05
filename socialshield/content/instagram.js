@@ -127,6 +127,10 @@
             <span class="ss-fab-action-icon">⚙️</span>
             <span>Audit Privacy Settings</span>
           </button>
+          <button class="ss-fab-action" data-action="parse-apps-page">
+            <span class="ss-fab-action-icon">🚪</span>
+            <span>Parse Connected Apps</span>
+          </button>
         </div>
       `;
       document.body.appendChild(fab);
@@ -203,7 +207,25 @@
         case 'audit-privacy-settings':
           await this.runPrivacyAudit();
           break;
+
+        case 'parse-apps-page':
+          await this.runAppsParse();
+          break;
       }
+    },
+
+    async runAppsParse() {
+      if (!location.pathname.includes('manage_access') && !location.pathname.includes('apps_and_websites')) {
+        this.notify('Open IG Settings → Apps and Websites first (/accounts/manage_access/).', 'warning');
+        return;
+      }
+      const apps = SocialShieldPrivacyAuditor.parseAppsPage();
+      const assess = SocialShieldPrivacyAuditor.assessApps(apps);
+      const data = { platform: 'instagram', apps, assessment: assess, capturedAt: new Date().toISOString(), url: location.href };
+      await SocialShieldStorage.set('connected_apps_instagram', data);
+      this.notify(`Found ${apps.length} connected app(s) — risk: ${assess.risk}. Open dashboard for details.`,
+        assess.risk === 'high' ? 'warning' : 'success');
+      chrome.runtime.sendMessage({ type: 'APPS_PARSED', data });
     },
 
     async runPrivacyAudit() {
@@ -292,11 +314,13 @@
               type: 'FETCH_PROFILE_INFO', username: profile
             });
             if (profileInfo) {
-              // Compute aHash của profile pic để cross-platform linkage so sánh
-              let profilePicHash = null;
+              // Compute aHash + pHash của profile pic để cross-platform linkage so sánh
+              let profilePicHash = null, profilePicPHash = null;
               if (profileInfo.profilePicUrl) {
                 try {
-                  profilePicHash = await SocialShieldImageAnalyzer.computeAHash(profileInfo.profilePicUrl);
+                  const both = await SocialShieldImageAnalyzer.computeBothHashes(profileInfo.profilePicUrl);
+                  profilePicHash = both.aHash;
+                  profilePicPHash = both.pHash;
                 } catch (e) { /* CORS hoặc image load fail — ignore */ }
               }
 
@@ -305,6 +329,7 @@
                 bio: profileInfo.bio || '',
                 profilePicUrl: profileInfo.profilePicUrl || '',
                 profilePicHash,
+                profilePicPHash,
                 externalUrl: profileInfo.externalUrl || '',
                 isPrivate: !!profileInfo.isPrivate,
                 isVerified: !!profileInfo.isVerified,
@@ -755,21 +780,23 @@
         const twHistory = await SocialShieldStorage.getProfileHistory('twitter', profile);
         if (twHistory && twHistory.length > 0) {
           const twLatest = twHistory[twHistory.length - 1];
-          // Compute IG hash on-the-fly từ profile pic hiện tại
-          let igHash = null;
+          // Compute IG aHash+pHash on-the-fly từ profile pic hiện tại
+          let igHash = null, igPHash = null;
           try {
             if (profileData.profilePicUrl) {
-              igHash = await SocialShieldImageAnalyzer.computeAHash(profileData.profilePicUrl);
+              const both = await SocialShieldImageAnalyzer.computeBothHashes(profileData.profilePicUrl);
+              igHash = both.aHash; igPHash = both.pHash;
             }
           } catch {}
           linkage = SocialShieldScanner.detectCrossPlatformLinkage([
             { platform: 'instagram', username: profile, displayName,
               bio: bioText, profilePicUrl: profileData.profilePicUrl,
-              profilePicHash: igHash,
+              profilePicHash: igHash, profilePicPHash: igPHash,
               externalUrl: profileData.externalUrl },
             { platform: 'twitter', username: profile, displayName: twLatest.displayName,
               bio: twLatest.bio, profilePicUrl: twLatest.profilePicUrl,
               profilePicHash: twLatest.profilePicHash,
+              profilePicPHash: twLatest.profilePicPHash,
               externalUrl: twLatest.externalUrl },
           ]);
         }

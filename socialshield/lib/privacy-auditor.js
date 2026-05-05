@@ -278,6 +278,97 @@ const SocialShieldPrivacyAuditor = {
   },
 
   /**
+   * Parse trang "Connected Apps" / "Apps and Websites":
+   * trả về list { name, lastUsed, scope, platform } để user review hàng loạt.
+   * Không tự revoke (cần user click → vẫn cần manual workflow).
+   *
+   * IG layout: /accounts/manage_access/ — danh sách app dưới dạng <a> hoặc <div>
+   * trong các tab Active / Expired / Removed.
+   * X layout: /settings/connected_apps — danh sách <a role="link"> chứa app name + scope.
+   *
+   * Vì DOM có thể đổi, scraping này best-effort + tolerant.
+   *
+   * @returns {Array<{name, lastUsed?, scope?, status?}>}
+   */
+  parseAppsPage() {
+    const url = location.pathname.toLowerCase();
+    const host = location.hostname;
+    const apps = [];
+
+    if (host.includes('instagram.com') &&
+        (url.includes('manage_access') || url.includes('apps_and_websites'))) {
+      // IG: mỗi entry thường là <a href> chứa text "AppName" + meta phụ
+      // hoặc <div role="button"> với heading.
+      const candidates = document.querySelectorAll(
+        'a[role="link"], div[role="button"], main a, main [role="article"]'
+      );
+      const seen = new Set();
+      for (const el of candidates) {
+        const text = (el.innerText || '').trim();
+        if (!text || text.length < 2 || text.length > 200) continue;
+        // Skip nav/buttons
+        if (/^(active|expired|removed|settings|cancel|edit|home|profile)$/i.test(text)) continue;
+        // First line = app name thường
+        const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+        if (lines.length === 0) continue;
+        const name = lines[0];
+        if (seen.has(name)) continue;
+        if (name.length < 2 || name.length > 60) continue;
+        seen.add(name);
+        // Extract date-like: "Active until ..." / "Last used ..."
+        const meta = lines.slice(1).join(' • ');
+        const lastUsed = (meta.match(/(active until|last used|expires?)[^•]*/i) || [])[0] || null;
+        // Determine status từ container heading lớn hơn
+        let status = 'active';
+        const ancestor = el.closest('section') || el.closest('[role="region"]') || el.parentElement;
+        const heading = ancestor?.querySelector('h2, h3, [role="heading"]')?.innerText?.toLowerCase() || '';
+        if (heading.includes('expired')) status = 'expired';
+        else if (heading.includes('removed')) status = 'removed';
+        apps.push({ platform: 'instagram', name, lastUsed, status, raw: meta });
+      }
+    } else if (/(x|twitter)\.com$/.test(host) && url.includes('connected_apps')) {
+      const links = document.querySelectorAll('a[role="link"], a[href*="/connected_apps/"]');
+      const seen = new Set();
+      for (const el of links) {
+        const text = (el.innerText || '').trim();
+        if (!text) continue;
+        const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+        const name = lines[0];
+        if (!name || seen.has(name) || name.length > 80) continue;
+        // Filter UI noise
+        if (/^(connected apps|settings|back|done|revoke access)$/i.test(name)) continue;
+        seen.add(name);
+        const scope = lines.slice(1).find(l => /read|write|access|permission/i.test(l)) || null;
+        apps.push({ platform: 'twitter', name, scope, raw: lines.slice(1).join(' • ') });
+      }
+    }
+
+    return apps;
+  },
+
+  /**
+   * Quick risk assessment cho 1 list apps.
+   */
+  assessApps(apps) {
+    if (!apps || apps.length === 0) {
+      return { count: 0, risk: 'none', recommendation: 'No connected apps detected.' };
+    }
+    const total = apps.length;
+    const writeScope = apps.filter(a => /write|post|tweet|publish/i.test(a.scope || '')).length;
+    let risk = 'low';
+    if (total > 10 || writeScope > 3) risk = 'high';
+    else if (total > 5 || writeScope > 1) risk = 'medium';
+    return {
+      count: total,
+      writeScope,
+      risk,
+      recommendation: total > 5
+        ? `${total} apps connected → review và revoke các app không nhận ra hoặc không dùng >6 tháng.`
+        : `${total} apps — manageable, nhưng vẫn nên audit định kỳ.`,
+    };
+  },
+
+  /**
    * Get summary từ audit result.
    */
   summarize(audit) {

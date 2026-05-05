@@ -37,6 +37,7 @@
     "https://lichess.org/*",
     "https://api.chess.com/*",
     "https://codeforces.com/*",
+    "https://nominatim.openstreetmap.org/*",
     "http://localhost:*/*"
   ],
   "background": {
