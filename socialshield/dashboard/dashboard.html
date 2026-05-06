@@ -230,6 +230,13 @@
         </div>
 
         <div class="ss-card">
+          <div class="ss-card-header">
+            <h2>Scans</h2>
+            <div style="display:flex; gap:8px;">
+              <button class="ss-btn ss-btn-sm" id="btn-privacy-refresh">🔄 Refresh</button>
+              <button class="ss-btn ss-btn-sm" id="btn-privacy-debug">🔧 Debug storage</button>
+            </div>
+          </div>
           <div class="ss-card-body" id="privacy-list">
             <div class="ss-empty-state">
               <div class="ss-empty-icon">🔍</div>
@@ -406,6 +413,7 @@
               <input type="text" class="ss-input" id="tool-geo-username" placeholder="Instagram username (đã chạy Privacy Scan trước)" style="flex: 1;">
               <button class="ss-btn ss-btn-primary" id="btn-tool-geo-load">Load</button>
               <button class="ss-btn" id="btn-tool-geo-heatmap" title="Geocode + render heatmap (cần network lần đầu, dùng OSM Nominatim)">🗺️ Heatmap</button>
+              <button class="ss-btn" id="btn-tool-geo-rescrape" title="Mở IG profile + scrape DOM lấy posts (dùng khi API trả 0 posts)">🔄 Force re-scrape</button>
             </div>
             <canvas id="tool-geo-canvas" width="700" height="380" style="width:100%; max-width:700px; display:none; border-radius:6px; margin-bottom:8px;"></canvas>
             <div id="tool-geo-result"></div>

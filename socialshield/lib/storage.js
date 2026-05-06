@@ -272,7 +272,9 @@ const SocialShieldStorage = {
   async getStats() {
     const all = await this.getAll();
     const snapshotKeys = Object.keys(all).filter(k => k.startsWith('snapshots_'));
-    const privacyKeys = Object.keys(all).filter(k => k.startsWith('privacy_'));
+    // Exclude `privacy_audit_*` (object, không phải array scan history)
+    const privacyKeys = Object.keys(all).filter(k =>
+      k.startsWith('privacy_') && !k.startsWith('privacy_audit_') && Array.isArray(all[k]));
 
     let totalSnapshots = 0;
     let totalProfiles = new Set();

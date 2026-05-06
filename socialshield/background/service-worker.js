@@ -103,8 +103,17 @@ const InstagramAPI = {
     const user = data?.data?.user;
     if (!user) return null;
 
-    // Save to cache
-    await SocialShieldStorage.cacheSet(cacheKey, user);
+    // Chỉ cache nếu response "đầy đủ" — IG đôi khi trả user metadata nhưng
+    // edges rỗng do degraded response (rate-limit / missing session header).
+    // Cache rỗng → user retry trong 15 phút sẽ vẫn rỗng → không bao giờ recover.
+    const edges = user.edge_owner_to_timeline_media?.edges || [];
+    const postCount = user.edge_owner_to_timeline_media?.count || 0;
+    const hasFullData = edges.length > 0 || postCount === 0 || user.is_private;
+    if (hasFullData) {
+      await SocialShieldStorage.cacheSet(cacheKey, user);
+    } else {
+      console.warn(`[SocialShield BG] Degraded response for ${username}: ${postCount} posts but 0 edges. Not caching, will retry.`);
+    }
     return user;
   },
 
@@ -138,6 +147,9 @@ const InstagramAPI = {
         if (!node) continue;
         const captionText = node?.edge_media_to_caption?.edges?.[0]?.node?.text || '';
         if (captionText) recentCaptions.push(captionText);
+        // node.location = XDTLocationDict { pk, lat, lng, name, ... } khi có,
+        // null khi user không tag. Extract đủ name + lat + lng cho Geo Heatmap.
+        const loc = node.location;
         recentPosts.push({
           id: node.id,
           shortcode: node.shortcode,
@@ -145,7 +157,9 @@ const InstagramAPI = {
           likes: node.edge_liked_by?.count || node.edge_media_preview_like?.count || 0,
           comments: node.edge_media_to_comment?.count || 0,
           isVideo: !!node.is_video,
-          location: node.location?.name || null,
+          location: loc?.name || loc?.short_name || null,
+          lat: loc?.lat ?? loc?.latitude ?? null,
+          lng: loc?.lng ?? loc?.longitude ?? null,
           takenAt: node.taken_at_timestamp ? new Date(node.taken_at_timestamp * 1000).toISOString() : null,
         });
       }
@@ -167,6 +181,167 @@ const InstagramAPI = {
       };
     } catch (err) {
       console.error('[SocialShield BG] fetchProfileInfo error:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Fetch chi tiết 1 post qua shortcode. Dùng cho DOM-scrape fallback khi
+   * web_profile_info trả 0 edges. Endpoint: post page chứa __NEXT_DATA__ /
+   * media JSON. Cookies + CSRF cần thiết.
+   */
+  async fetchPostDetail(shortcode) {
+    if (!shortcode) return null;
+    // Cache key version v2: bump để invalidate cache trước khi parser biết về
+    // location.lat/lng. Cache cũ chứa { location: null } sẽ bị bỏ qua.
+    const cacheKey = `_cache_ig_post_v2_${shortcode}`;
+    const TTL = 60 * 60 * 1000; // 1 giờ
+    const cached = await SocialShieldStorage.cacheGet(cacheKey, TTL);
+    if (cached) {
+      console.log(`[SocialShield BG] cache hit ${shortcode}: location=${cached.location || '∅'} lat=${cached.lat ?? '∅'}`);
+      return cached;
+    }
+    console.log(`[SocialShield BG] fetchPostDetail ${shortcode} — fetching fresh`);
+
+    try {
+      const csrfToken = await this.getCsrfToken();
+      const cookieHeader = await this.buildCookieHeader();
+      const res = await fetch(
+        `https://www.instagram.com/api/v1/media/${shortcode}/info/`,
+        { headers: this._igHeaders(csrfToken, cookieHeader) }
+      );
+      // Nếu media-info endpoint fail, fallback sang scrape post page HTML
+      if (!res.ok) {
+        console.warn(`[SocialShield BG] media/${shortcode}/info/ HTTP ${res.status} → falling back to HTML scrape`);
+        return await this._scrapePostPageHtml(shortcode, csrfToken, cookieHeader);
+      }
+      const data = await res.json();
+      const item = data?.items?.[0];
+      if (!item) {
+        console.warn(`[SocialShield BG] media/${shortcode}/info/ returned ok but items empty → HTML scrape fallback`);
+        return await this._scrapePostPageHtml(shortcode, csrfToken, cookieHeader);
+      }
+
+      // IG đôi khi đặt location ở các path khác nhau:
+      //  - item.location.name        (web schema)
+      //  - item.location.short_name  (mobile-style)
+      //  - item.lat / item.lng       (raw GPS)
+      // Lần đầu (chưa cache) log full shape của item.location để debug
+      if (!this._loggedLocationShape) {
+        this._loggedLocationShape = true;
+        console.log('[SocialShield BG] Sample post location shape:', shortcode,
+          JSON.stringify({
+            location: item.location,
+            lat: item.lat,
+            lng: item.lng,
+            location_keys: item.location ? Object.keys(item.location) : null,
+          }));
+      }
+
+      const loc = item.location;
+      let locationName = null, locationLat = null, locationLng = null;
+      if (loc) {
+        locationName = loc.name || loc.short_name || loc.location_name || null;
+        locationLat = loc.lat ?? loc.latitude ?? null;
+        locationLng = loc.lng ?? loc.longitude ?? null;
+      }
+      // Fallback: top-level lat/lng nếu media tagged GPS trực tiếp
+      if (locationLat == null && item.lat != null) locationLat = item.lat;
+      if (locationLng == null && item.lng != null) locationLng = item.lng;
+
+      const out = {
+        shortcode,
+        caption: item.caption?.text || '',
+        location: locationName,
+        lat: locationLat,
+        lng: locationLng,
+        likes: item.like_count || 0,
+        comments: item.comment_count || 0,
+        isVideo: !!item.video_versions,
+        takenAt: item.taken_at ? new Date(item.taken_at * 1000).toISOString() : null,
+        _source: locationName || locationLat != null ? 'media_info_api' : 'media_info_api_empty',
+      };
+
+      // Nếu API trả nhưng không có location data, thử HTML scrape — có thể tìm
+      // được location từ embedded JSON dù API endpoint đã strip.
+      if (!locationName && locationLat == null) {
+        console.log(`[SocialShield BG] media-info ${shortcode} OK nhưng không có location, thử HTML scrape...`);
+        const scraped = await this._scrapePostPageHtml(shortcode, csrfToken, cookieHeader);
+        if (scraped && (scraped.location || scraped.lat != null)) {
+          out.location = scraped.location;
+          out.lat = scraped.lat;
+          out.lng = scraped.lng;
+          if (!out.caption) out.caption = scraped.caption || '';
+          out._source = 'html_scrape_after_api_empty';
+        }
+      }
+
+      // Chỉ cache nếu có data hữu ích, tránh cache rỗng dài hạn
+      if (out.location || out.lat != null) {
+        await SocialShieldStorage.cacheSet(cacheKey, out);
+      }
+      return out;
+    } catch (err) {
+      console.warn('[SocialShield BG] fetchPostDetail error:', shortcode, err.message);
+      return null;
+    }
+  },
+
+  /** Fallback: scrape post page HTML. 3 nguồn data có thể có:
+   *   1. JSON-LD với contentLocation.name (hợp pháp, ổn định)
+   *   2. Raw inline GraphQL location object (chứa pk/lat/lng/name) — IG hay embed
+   *      "location":{"pk":...,"lat":...,"lng":...,"name":"...","__typename":"XDTLocation"}
+   *   3. caption text trong JSON-LD
+   * Cần lat/lng raw cho heatmap → ưu tiên path #2. */
+  async _scrapePostPageHtml(shortcode, csrfToken, cookieHeader) {
+    try {
+      const res = await fetch(`https://www.instagram.com/p/${shortcode}/`, {
+        headers: { 'User-Agent': navigator.userAgent, Cookie: cookieHeader },
+      });
+      if (!res.ok) {
+        console.warn(`[SocialShield BG] post page fetch ${shortcode} HTTP ${res.status}`);
+        return null;
+      }
+      const html = await res.text();
+      let location = null, lat = null, lng = null, caption = '';
+
+      // 1. JSON-LD (caption + name fallback)
+      const ldMatch = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
+      if (ldMatch) {
+        try {
+          const ld = JSON.parse(ldMatch[1]);
+          location = ld.contentLocation?.name || null;
+          caption = ld.caption || ld.articleBody || '';
+        } catch {}
+      }
+
+      // 2. Raw GraphQL location object — regex match anywhere in HTML
+      // Pattern: "location":{"pk":NUM,"lat":FLOAT,"lng":FLOAT,"name":"...","..."}
+      // Có thể có nhiều, lấy cái đầu (post chính, không phải tag/feed location)
+      const locRegex = /"location"\s*:\s*\{\s*"pk"\s*:\s*\d+\s*,\s*"lat"\s*:\s*(-?\d+\.?\d*)\s*,\s*"lng"\s*:\s*(-?\d+\.?\d*)\s*,\s*"name"\s*:\s*"([^"]+)"/;
+      const locMatch = html.match(locRegex);
+      if (locMatch) {
+        lat = parseFloat(locMatch[1]);
+        lng = parseFloat(locMatch[2]);
+        location = locMatch[3];  // override JSON-LD name nếu có
+        console.log(`[SocialShield BG] HTML scrape ${shortcode} found location: ${location} (${lat}, ${lng})`);
+      } else if (location) {
+        console.log(`[SocialShield BG] HTML scrape ${shortcode} location name only: ${location} (no lat/lng)`);
+      } else {
+        // Try simpler pattern (location object without pk first)
+        const altRegex = /"location"\s*:\s*\{[^}]*?"name"\s*:\s*"([^"]+)"[^}]*?(?:"lat"\s*:\s*(-?\d+\.?\d*)\s*,\s*"lng"\s*:\s*(-?\d+\.?\d*))?/;
+        const alt = html.match(altRegex);
+        if (alt) {
+          location = alt[1];
+          if (alt[2]) lat = parseFloat(alt[2]);
+          if (alt[3]) lng = parseFloat(alt[3]);
+          console.log(`[SocialShield BG] HTML scrape ${shortcode} alt-pattern: ${location} (${lat}, ${lng})`);
+        }
+      }
+
+      return { shortcode, caption, location, lat, lng, likes: 0, comments: 0, isVideo: false, takenAt: null, _source: 'html_scrape' };
+    } catch (err) {
+      console.warn(`[SocialShield BG] _scrapePostPageHtml ${shortcode} threw:`, err.message);
       return null;
     }
   },
@@ -994,6 +1169,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse(info);
       }).catch(err => {
         console.error('[SocialShield] FETCH_PROFILE_INFO error:', err);
+        sendResponse(null);
+      });
+      return true;
+
+    case 'FETCH_POST_DETAIL':
+      InstagramAPI.fetchPostDetail(message.shortcode).then(detail => {
+        sendResponse(detail);
+      }).catch(err => {
+        console.error('[SocialShield] FETCH_POST_DETAIL error:', err);
         sendResponse(null);
       });
       return true;

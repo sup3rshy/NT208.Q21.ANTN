@@ -768,10 +768,27 @@
       analysis.recentCaptions = recentCaptions;
 
       if (profile) {
-        await SocialShieldStorage.savePrivacyScan('twitter', profile, analysis.privacyFindings);
-        await SocialShieldStorage.set(`doxxing_twitter_${profile}`, {
-          ...doxxing, username: profile, platform: 'twitter',
-        });
+        try {
+          const saved = await SocialShieldStorage.savePrivacyScan('twitter', profile, analysis.privacyFindings || []);
+          console.log('[SocialShield] Privacy scan saved:', `privacy_twitter_${profile}`,
+            'findings:', (analysis.privacyFindings || []).length, 'riskScore:', saved.riskScore);
+          const verify = await SocialShieldStorage.get(`privacy_twitter_${profile}`);
+          if (!verify || verify.length === 0) {
+            console.error('[SocialShield] Twitter privacy scan SAVE VERIFY FAILED');
+            this.notify('⚠ Scan completed but failed to save to storage. Check console.', 'error');
+          }
+        } catch (err) {
+          console.error('[SocialShield] savePrivacyScan threw:', err);
+          this.notify('⚠ Scan failed to save: ' + err.message, 'error');
+        }
+        try {
+          await SocialShieldStorage.set(`doxxing_twitter_${profile}`, {
+            ...doxxing, username: profile, platform: 'twitter',
+          });
+        } catch (err) { console.error('[SocialShield] save doxxing report failed:', err); }
+      } else {
+        console.warn('[SocialShield] Privacy scan: profile is null/empty — scan NOT saved.');
+        this.notify('⚠ Could not detect username from URL — scan not saved.', 'error');
       }
 
       if (analysis.privacyFindings.length === 0) {

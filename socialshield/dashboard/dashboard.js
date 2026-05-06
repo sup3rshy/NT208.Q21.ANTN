@@ -656,8 +656,54 @@
 
     async loadPrivacyScans() {
       const container = document.getElementById('privacy-list');
+      // Wire debug + refresh buttons (mỗi lần load lại lần đầu, đảm bảo có handler)
+      const refreshBtn = document.getElementById('btn-privacy-refresh');
+      if (refreshBtn && !refreshBtn._wired) {
+        refreshBtn._wired = true;
+        refreshBtn.addEventListener('click', () => this.loadPrivacyScans());
+      }
+      const debugBtn = document.getElementById('btn-privacy-debug');
+      if (debugBtn && !debugBtn._wired) {
+        debugBtn._wired = true;
+        debugBtn.addEventListener('click', async () => {
+          const all = await SocialShieldStorage.getAll();
+          const privacyKeys = Object.keys(all).filter(k => k.startsWith('privacy_'));
+          const profileKeys = Object.keys(all).filter(k => k.startsWith('profile_'));
+          const doxxingKeys = Object.keys(all).filter(k => k.startsWith('doxxing_'));
+          let html = `<div style="font-family:monospace; font-size:12px; padding:12px; background: rgba(0,0,0,0.3); border-radius:6px; margin-top:12px;">
+            <div><b>Total storage keys:</b> ${Object.keys(all).length}</div>
+            <div><b>privacy_*:</b> ${privacyKeys.length} key(s) — ${privacyKeys.join(', ') || '(none)'}</div>
+            <div><b>profile_*:</b> ${profileKeys.length} key(s) — ${profileKeys.join(', ') || '(none)'}</div>
+            <div><b>doxxing_*:</b> ${doxxingKeys.length} key(s) — ${doxxingKeys.join(', ') || '(none)'}</div>`;
+          if (privacyKeys.length === 0 && profileKeys.length === 0) {
+            html += `<div style="color: orange; margin-top: 10px;">
+              ⚠ Không có scan/profile nào trong storage. Nguyên nhân thường gặp:
+              <ul>
+                <li>Bạn vừa <b>reload extension</b> sau khi chạy scan → storage mới reset</li>
+                <li>Scan chạy ở 1 instance extension khác (chrome://extensions có 2 entry?)</li>
+                <li>Content script crash trước khi save (xem DevTools console của tab IG)</li>
+                <li>URL không phải profile page (vd /explore/) → getCurrentProfile() return null</li>
+              </ul>
+              <b>Cách verify:</b> mở tab Instagram → F12 console → chạy:
+              <pre style="margin-top:6px; padding:6px; background:#000; color:#0f0;">chrome.storage.local.get(null, x => console.log(Object.keys(x)))</pre>
+            </div>`;
+          } else {
+            html += '<div style="color: var(--accent); margin-top:10px;">✓ Có data trong storage. Nếu không hiện trên page → reload page.</div>';
+          }
+          html += '</div>';
+          container.insertAdjacentHTML('afterbegin', html);
+        });
+      }
+
       const allData = await SocialShieldStorage.getAll();
-      const privacyKeys = Object.keys(allData).filter(k => k.startsWith('privacy_'));
+      // Filter scan history thôi — exclude `privacy_audit_*` (là object, không phải array
+      // → từng làm crash render với TypeError "object is not iterable").
+      // Ngoài ra defensive check Array.isArray để chống schema cũ.
+      const privacyKeys = Object.keys(allData).filter(k =>
+        k.startsWith('privacy_') &&
+        !k.startsWith('privacy_audit_') &&
+        Array.isArray(allData[k])
+      );
 
       if (privacyKeys.length === 0) {
         container.innerHTML = `
@@ -746,7 +792,8 @@
     async loadSecurityScore() {
       const allData = await SocialShieldStorage.getAll();
       const snapshotKeys = Object.keys(allData).filter(k => k.startsWith('snapshots_'));
-      const privacyKeys = Object.keys(allData).filter(k => k.startsWith('privacy_'));
+      const privacyKeys = Object.keys(allData).filter(k =>
+        k.startsWith('privacy_') && !k.startsWith('privacy_audit_') && Array.isArray(allData[k]));
       const profileKeys = Object.keys(allData).filter(k => k.startsWith('profile_'));
       const alerts = allData.alerts || [];
 
@@ -758,7 +805,7 @@
       let criticalFindings = 0;
       for (const key of privacyKeys) {
         const scans = allData[key] || [];
-        if (scans.length > 0) {
+        if (Array.isArray(scans) && scans.length > 0) {
           const latest = scans[scans.length - 1];
           for (const f of (latest.results || [])) {
             totalFindings++;
@@ -1045,8 +1092,9 @@
       const allData = await SocialShieldStorage.getAll();
       const rows = [['Type', 'Platform', 'Username', 'Severity', 'Title', 'Message', 'Timestamp']];
 
-      // Privacy findings
-      const privacyKeys = Object.keys(allData).filter(k => k.startsWith('privacy_'));
+      // Privacy findings (chỉ scan history, exclude audit objects)
+      const privacyKeys = Object.keys(allData).filter(k =>
+        k.startsWith('privacy_') && !k.startsWith('privacy_audit_') && Array.isArray(allData[k]));
       for (const key of privacyKeys) {
         const scans = allData[key] || [];
         for (const scan of scans) {
@@ -1483,6 +1531,37 @@
       document.getElementById('btn-revsearch-bing').addEventListener('click', () =>
         openRevSearch(u => `https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${u}`));
 
+      // ============= Force re-scrape from IG tab =============
+      document.getElementById('btn-tool-geo-rescrape').addEventListener('click', async () => {
+        const username = document.getElementById('tool-geo-username').value.trim();
+        const out = document.getElementById('tool-geo-result');
+        if (!username) { out.innerHTML = '<div style="color:var(--danger);">Enter username</div>'; return; }
+        // Clear cache để force fresh fetch (cả profile + post details)
+        try {
+          await SocialShieldStorage.remove(`recent_posts_instagram_${username}`);
+          await SocialShieldStorage.remove(`_cache_ig_profile_${username}`);
+          // Clear all post detail cache
+          const all = await SocialShieldStorage.getAll();
+          // Clear cả v1 (legacy) lẫn v2
+          const postKeys = Object.keys(all).filter(k =>
+            k.startsWith('_cache_ig_post_') || k.startsWith('_cache_ig_post_v2_'));
+          for (const k of postKeys) await SocialShieldStorage.remove(k);
+          console.log(`[SocialShield] Cleared cache: profile + ${postKeys.length} post details`);
+        } catch {}
+        // Mở IG profile tab → user click Privacy Scan từ FAB
+        chrome.tabs.create({ url: `https://www.instagram.com/${encodeURIComponent(username)}/` });
+        out.innerHTML = `<div style="color: var(--accent); font-size: 13px; padding: 10px; background: rgba(0,212,170,0.08); border-radius: 4px;">
+          ✓ Đã mở tab Instagram + clear cache. Trên tab đó:
+          <ol style="margin: 6px 0 0 18px;">
+            <li>Đợi page load xong</li>
+            <li>Click FAB (góc dưới phải) → <b>Privacy Scan</b></li>
+            <li>Đợi notification "Scanning... → No privacy risks/Found N issues"</li>
+            <li>Quay lại đây, click Load lại</li>
+          </ol>
+          Privacy Scan giờ có DOM scrape fallback — nếu API trả 0 posts sẽ tự scrape post links + fetch detail.
+        </div>`;
+      });
+
       // ============= Geo Heatmap =============
       document.getElementById('btn-tool-geo-load').addEventListener('click', async () => {
         const username = document.getElementById('tool-geo-username').value.trim();
@@ -1490,15 +1569,47 @@
         if (!username) { out.innerHTML = '<div style="color:var(--danger);">Enter username</div>'; return; }
         out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Fetching recent posts...</div>';
         try {
-          const info = await chrome.runtime.sendMessage({ type: 'FETCH_PROFILE_INFO', username });
-          if (!info) {
-            out.innerHTML = '<div style="color:var(--danger);">Could not fetch profile (must be logged into Instagram).</div>';
+          // Ưu tiên đọc từ cache (lưu lúc Privacy Scan trên page IG) — IG API
+          // hay rate-limit khi gọi từ dashboard, dùng cache là reliable nhất.
+          let posts = [], info = null, fromCache = false;
+          const cached = await SocialShieldStorage.get(`recent_posts_instagram_${username}`);
+          if (cached && Array.isArray(cached.posts) && cached.posts.length > 0) {
+            posts = cached.posts;
+            info = { isPrivate: false, postCount: posts.length, recentPosts: posts };
+            fromCache = true;
+          } else {
+            info = await chrome.runtime.sendMessage({ type: 'FETCH_PROFILE_INFO', username });
+            if (!info) {
+              out.innerHTML = `<div style="color:var(--danger); font-size:13px;">
+                Could not fetch profile <code>@${this._escapeHtml(username)}</code> + không có cache.<br>
+                Possible causes:
+                <ul style="margin:6px 0 0 18px;">
+                  <li>Bạn chưa login Instagram trong Chrome này</li>
+                  <li>Username không tồn tại / đã đổi</li>
+                  <li>IG API rate-limit (đợi vài phút thử lại)</li>
+                  <li>Chưa từng chạy Privacy Scan profile này → no cache</li>
+                </ul>
+              </div>`;
+              return;
+            }
+            posts = info.recentPosts || [];
+          }
+          // Phân biệt rõ các trường hợp 0 posts
+          if (posts.length === 0) {
+            let reason;
+            if (info.isPrivate) {
+              reason = `🔒 Account <b>private</b> + bạn không follow → IG API không trả posts. Heatmap cần follow tài khoản này trước. Bản thân privacy là tốt cho user, nhưng tool không scan được.`;
+            } else if ((info.postCount || 0) === 0) {
+              reason = `User chưa post bài nào (postCount=0). Không có data để render.`;
+            } else {
+              reason = `IG trả về 0 posts dù profile có ${info.postCount} posts — có thể do rate-limit hoặc cần re-login. Thử mở instagram.com → Privacy Scan profile này → quay lại đây.`;
+            }
+            out.innerHTML = `<div style="color: orange; font-size: 13px; padding: 10px; background: rgba(255,165,0,0.08); border-left: 3px solid orange; border-radius: 4px;">${reason}</div>`;
             return;
           }
-          const posts = info.recentPosts || [];
           const withLoc = posts.filter(p => p.location);
           if (withLoc.length === 0) {
-            out.innerHTML = `<div style="color: var(--accent);">✓ ${posts.length} recent posts checked, none have location tags. Good privacy.</div>`;
+            out.innerHTML = `<div style="color: var(--accent); font-size: 13px;">✓ Quét ${posts.length} recent posts — <b>không post nào có location tag</b>. Good privacy 🎉</div>`;
             return;
           }
           // Cluster by location.name
@@ -1511,7 +1622,10 @@
           }
           const clusters = Object.values(cluster).sort((a, b) => b.count - a.count);
 
-          let html = `<div style="margin-bottom: 12px; font-size: 13px;"><b>${withLoc.length}</b>/${posts.length} posts có location → <b>${clusters.length}</b> địa điểm khác nhau:</div>`;
+          let html = `<div style="margin-bottom: 12px; font-size: 13px;">
+            <b>${withLoc.length}</b>/${posts.length} posts có location → <b>${clusters.length}</b> địa điểm khác nhau
+            ${fromCache ? `<span style="color: var(--text-secondary); font-size: 11px;">(from cache, ${this._formatTime(cached.fetchedAt)})</span>` : ''}
+          </div>`;
           html += '<table style="width:100%; border-collapse: collapse;">';
           html += '<thead><tr style="border-bottom: 1px solid var(--border);"><th style="text-align:left;padding:6px;">Location</th><th style="text-align:left;padding:6px;">Posts</th><th style="text-align:left;padding:6px;">Map</th></tr></thead><tbody>';
           for (const c of clusters) {
@@ -1542,35 +1656,83 @@
 
         out.innerHTML = '<div style="color: var(--text-secondary);">⏳ Fetching profile + locations...</div>';
         try {
-          const info = await chrome.runtime.sendMessage({ type: 'FETCH_PROFILE_INFO', username });
-          const posts = (info && info.recentPosts) || [];
-          const withLoc = posts.filter(p => p.location);
-          if (withLoc.length === 0) {
-            out.innerHTML = '<div style="color: var(--accent);">✓ No location-tagged posts. Nothing to plot.</div>';
+          // Cache-first
+          let posts = [], info = null;
+          const cached = await SocialShieldStorage.get(`recent_posts_instagram_${username}`);
+          if (cached && Array.isArray(cached.posts) && cached.posts.length > 0) {
+            posts = cached.posts;
+            info = { isPrivate: false, postCount: posts.length };
+          } else {
+            info = await chrome.runtime.sendMessage({ type: 'FETCH_PROFILE_INFO', username });
+            if (!info) {
+              out.innerHTML = `<div style="color:var(--danger); font-size:13px;">Could not fetch <code>@${this._escapeHtml(username)}</code> + không có cache. Chạy Privacy Scan trên instagram.com trước.</div>`;
+              canvas.style.display = 'none';
+              return;
+            }
+            posts = info.recentPosts || [];
+          }
+          if (posts.length === 0) {
+            const reason = info.isPrivate
+              ? `🔒 Private account, không follow được → không có posts. Cần follow tài khoản trước.`
+              : (info.postCount || 0) === 0
+                ? `User chưa post bài nào.`
+                : `IG trả 0 posts dù profile có ${info.postCount} posts (rate-limit?). Thử Privacy Scan trên instagram.com trước.`;
+            out.innerHTML = `<div style="color: orange; font-size: 13px; padding: 10px; background: rgba(255,165,0,0.08); border-left: 3px solid orange; border-radius: 4px;">${reason}</div>`;
             canvas.style.display = 'none';
             return;
           }
-          // Cluster by name
+          // Posts có thể có location name HOẶC lat/lng raw (hoặc cả 2)
+          const withLoc = posts.filter(p => p.location || (p.lat != null && p.lng != null));
+          if (withLoc.length === 0) {
+            out.innerHTML = `<div style="color: var(--accent); font-size: 13px;">✓ Quét ${posts.length} recent posts — không có location tag và không có GPS coord. Nothing to plot. (Privacy tốt!)</div>`;
+            canvas.style.display = 'none';
+            return;
+          }
+          // Cluster — key theo lat/lng nếu có (chính xác hơn name vì 2 venue cùng tên hiếm gặp ở vĩ độ giống)
           const cluster = {};
           for (const p of withLoc) {
-            cluster[p.location] = (cluster[p.location] || 0) + 1;
+            const key = (p.lat != null && p.lng != null)
+              ? `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`
+              : p.location;
+            if (!cluster[key]) {
+              cluster[key] = { name: p.location || `(${p.lat?.toFixed(3)}, ${p.lng?.toFixed(3)})`,
+                lat: p.lat, lng: p.lng, count: 0 };
+            }
+            cluster[key].count++;
           }
-          const names = Object.keys(cluster);
-          out.innerHTML = `<div style="color: var(--text-secondary);">⏳ Geocoding ${names.length} location(s) via OSM Nominatim (~1s each, cached)...</div>`;
+          const clustered = Object.values(cluster);
 
-          const geocoded = await SocialShieldHeatmap.geocodeBatch(names, (done, total) => {
-            out.innerHTML = `<div style="color: var(--text-secondary);">⏳ Geocoding ${done}/${total}...</div>`;
-          });
+          // Tách 2 nhóm: đã có lat/lng vs cần geocode
+          const directPoints = clustered.filter(c => c.lat != null && c.lng != null);
+          const needGeocode = clustered.filter(c => c.lat == null);
 
-          const points = geocoded
-            .filter(g => g.coord)
-            .map(g => ({ name: g.name, lat: g.coord.lat, lng: g.coord.lng, count: cluster[g.name] }));
+          let geocodedPoints = [];
+          if (needGeocode.length > 0) {
+            out.innerHTML = `<div style="color: var(--text-secondary);">⏳ Geocoding ${needGeocode.length} location(s) via OSM Nominatim (~1s each, cached)...</div>`;
+            const geocoded = await SocialShieldHeatmap.geocodeBatch(
+              needGeocode.map(c => c.name),
+              (done, total) => {
+                out.innerHTML = `<div style="color: var(--text-secondary);">⏳ Geocoding ${done}/${total}...</div>`;
+              }
+            );
+            geocodedPoints = geocoded
+              .filter(g => g.coord)
+              .map(g => {
+                const c = needGeocode.find(x => x.name === g.name);
+                return { name: g.name, lat: g.coord.lat, lng: g.coord.lng, count: c.count };
+              });
+          }
+          const points = [...directPoints, ...geocodedPoints];
+          const failed = needGeocode.length - geocodedPoints.length;
 
           canvas.style.display = 'block';
           SocialShieldHeatmap.render(canvas, points);
 
-          const failed = geocoded.filter(g => !g.coord).length;
-          let html = `<div style="font-size:13px; margin-top:8px;"><b>${points.length}</b>/${names.length} locations plotted${failed ? ` (<span style="color:var(--text-secondary);">${failed} failed to geocode</span>)` : ''}.</div>`;
+          let html = `<div style="font-size:13px; margin-top:8px;">
+            <b>${points.length}</b>/${clustered.length} locations plotted
+            ${directPoints.length ? `(${directPoints.length} from raw GPS, ${geocodedPoints.length} geocoded)` : ''}
+            ${failed ? `<span style="color:var(--text-secondary);"> · ${failed} failed to geocode</span>` : ''}.
+          </div>`;
           if (points.length) {
             const top = [...points].sort((a, b) => b.count - a.count).slice(0, 5);
             html += '<div style="font-size:12px; color:var(--text-secondary); margin-top:6px;">Top: ' +

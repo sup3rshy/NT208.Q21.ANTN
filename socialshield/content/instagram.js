@@ -651,8 +651,46 @@
           recentCaptions = info.recentCaptions || [];
           recentPosts = info.recentPosts || [];
           displayName = info.fullName || '';
+          console.log(`[SocialShield] API returned: postCount=${info.postCount}, recentPosts=${recentPosts.length}, isPrivate=${info.isPrivate}`);
+        } else {
+          console.warn('[SocialShield] FETCH_PROFILE_INFO returned null');
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        console.warn('[SocialShield] FETCH_PROFILE_INFO threw:', err);
+      }
+
+      // Fallback: nếu API trả rỗng nhưng đang ở profile page, scrape DOM
+      if (recentPosts.length === 0) {
+        console.log('[SocialShield] API returned 0 posts → trying DOM scrape fallback...');
+        try {
+          const scraped = await this._scrapePostsFromDOM(profile);
+          console.log(`[SocialShield] DOM scrape result: ${scraped.length} post(s)`);
+          if (scraped.length > 0) {
+            recentPosts = scraped;
+            console.log(`[SocialShield] ✓ DOM-scraped ${scraped.length} posts for fallback. Locations:`,
+              scraped.map(p => p.location).filter(Boolean));
+          }
+        } catch (err) {
+          console.error('[SocialShield] DOM scrape THREW:', err);
+        }
+      }
+
+      // Cache recentPosts riêng
+      if (recentPosts.length > 0) {
+        try {
+          await SocialShieldStorage.set(`recent_posts_instagram_${profile}`, {
+            posts: recentPosts,
+            displayName,
+            fetchedAt: new Date().toISOString(),
+            source: recentPosts[0]?._scraped ? 'dom_scrape' : 'api',
+          });
+          console.log(`[SocialShield] ✓ Cached ${recentPosts.length} posts at recent_posts_instagram_${profile} (source: ${recentPosts[0]?._scraped ? 'dom_scrape' : 'api'})`);
+        } catch (err) {
+          console.error('[SocialShield] Cache save failed:', err);
+        }
+      } else {
+        console.warn(`[SocialShield] Both API + DOM scrape returned 0 posts. Nothing cached.`);
+      }
 
       // Deep scan: bio + displayName + tất cả captions (recon tools không thấy được)
       const findings = SocialShieldScanner.scanFullProfile({
@@ -816,13 +854,33 @@
 
       // Lưu kết quả
       if (profile) {
-        await SocialShieldStorage.savePrivacyScan('instagram', profile, analysis.privacyFindings);
+        try {
+          const saved = await SocialShieldStorage.savePrivacyScan('instagram', profile, analysis.privacyFindings || []);
+          console.log('[SocialShield] Privacy scan saved:', `privacy_instagram_${profile}`,
+            'findings:', (analysis.privacyFindings || []).length, 'riskScore:', saved.riskScore);
+          // Verify đã ghi vào storage thành công
+          const verify = await SocialShieldStorage.get(`privacy_instagram_${profile}`);
+          if (!verify || verify.length === 0) {
+            console.error('[SocialShield] Privacy scan SAVE VERIFY FAILED — storage returned empty after write');
+            this.notify('⚠ Scan completed but failed to save to storage. Check console.', 'error');
+          }
+        } catch (err) {
+          console.error('[SocialShield] savePrivacyScan threw:', err);
+          this.notify('⚠ Scan completed but failed to save: ' + err.message, 'error');
+        }
         // Lưu doxxing report riêng để dashboard render
-        await SocialShieldStorage.set(`doxxing_instagram_${profile}`, {
-          ...doxxing,
-          username: profile,
-          platform: 'instagram',
-        });
+        try {
+          await SocialShieldStorage.set(`doxxing_instagram_${profile}`, {
+            ...doxxing,
+            username: profile,
+            platform: 'instagram',
+          });
+        } catch (err) {
+          console.error('[SocialShield] save doxxing report failed:', err);
+        }
+      } else {
+        console.warn('[SocialShield] Privacy scan: profile is null/empty — scan NOT saved. URL:', location.href);
+        this.notify('⚠ Could not detect username from URL — scan not saved.', 'error');
       }
 
       // Hiển thị kết quả
@@ -842,6 +900,123 @@
         type: 'PRIVACY_SCAN_COMPLETE',
         data: analysis
       });
+    },
+
+    /**
+     * Scrape post shortcodes từ DOM của profile page, sau đó fetch từng post
+     * qua oEmbed-like endpoint để extract location.
+     * Fallback khi web_profile_info API trả về 0 edges.
+     *
+     * Bước 1: Tìm tất cả <a href="/p/<shortcode>/"> trên page.
+     * Bước 2: Với mỗi shortcode (max 12), fetch GraphQL post info bằng cookies hiện tại.
+     * Bước 3: Trả về list { shortcode, location, caption, ... } tương thích với schema recentPosts.
+     */
+    async _scrapePostsFromDOM(username) {
+      const allLinks = document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]');
+      console.log(`[SocialShield] DOM scrape: found ${allLinks.length} candidate <a> tags`);
+
+      const shortcodes = new Set();
+      for (const a of allLinks) {
+        const href = a.getAttribute('href') || '';
+        const m = href.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+        if (m) shortcodes.add(m[2]);
+        if (shortcodes.size >= 12) break;
+      }
+      console.log(`[SocialShield] DOM scrape: extracted ${shortcodes.size} unique shortcodes:`, [...shortcodes]);
+
+      if (shortcodes.size === 0) {
+        const scripts = document.querySelectorAll('script:not([src])');
+        for (const s of scripts) {
+          const text = s.textContent || '';
+          const matches = text.matchAll(/"shortcode":"([A-Za-z0-9_-]+)"/g);
+          for (const m of matches) {
+            shortcodes.add(m[1]);
+            if (shortcodes.size >= 12) break;
+          }
+          if (shortcodes.size >= 12) break;
+        }
+        console.log(`[SocialShield] DOM scrape script-tag fallback: ${shortcodes.size} shortcodes`);
+        if (shortcodes.size === 0) return [];
+      }
+
+      // Fetch HTML của từng post page DIRECTLY từ content script — same-origin
+      // nên cookies tự động kèm theo (background SW phải build cookie header
+      // thủ công, dễ thiếu session token).
+      const posts = [];
+      for (const shortcode of shortcodes) {
+        const detail = await this._fetchPostHtmlDirect(shortcode);
+        if (detail) {
+          posts.push({ ...detail, _scraped: true });
+          console.log(`[SocialShield]   post ${shortcode}: location=${detail.location || '∅'} lat=${detail.lat ?? '∅'} lng=${detail.lng ?? '∅'} (source: ${detail._source})`);
+        } else {
+          console.log(`[SocialShield]   post ${shortcode}: HTML fetch failed`);
+        }
+      }
+      return posts;
+    },
+
+    /**
+     * Fetch HTML page của 1 post và parse location/caption từ embedded JSON.
+     * Chạy từ content script → same-origin fetch → cookies tự kèm.
+     * Tránh issue background SW thiếu session cookie.
+     */
+    async _fetchPostHtmlDirect(shortcode) {
+      try {
+        const res = await fetch(`/p/${shortcode}/`, {
+          credentials: 'include',
+          headers: { 'Accept': 'text/html', 'Sec-Fetch-Site': 'same-origin' },
+        });
+        if (!res.ok) {
+          console.warn(`[SocialShield] /p/${shortcode}/ HTTP ${res.status}`);
+          return null;
+        }
+        const html = await res.text();
+
+        let location = null, lat = null, lng = null, caption = '', source = 'html_none';
+
+        // Pattern A: full XDTLocationDict — pk, lat, lng, name (cùng order user đã share)
+        const rA = /"location"\s*:\s*\{\s*"pk"\s*:\s*\d+\s*,\s*"lat"\s*:\s*(-?\d+\.?\d*)\s*,\s*"lng"\s*:\s*(-?\d+\.?\d*)\s*,\s*"name"\s*:\s*"([^"]+)"/;
+        let m = html.match(rA);
+        if (m) {
+          lat = parseFloat(m[1]); lng = parseFloat(m[2]); location = m[3];
+          source = 'html_xdt_dict';
+        } else {
+          // Pattern B: name first, lat/lng có thể có hoặc không
+          const rB = /"location"\s*:\s*\{[^{}]*?"name"\s*:\s*"([^"]+)"[^{}]*?(?:"lat"\s*:\s*(-?\d+\.?\d*)\s*,\s*"lng"\s*:\s*(-?\d+\.?\d*))?[^{}]*?\}/;
+          m = html.match(rB);
+          if (m) {
+            location = m[1];
+            if (m[2]) lat = parseFloat(m[2]);
+            if (m[3]) lng = parseFloat(m[3]);
+            source = 'html_alt_pattern';
+          }
+        }
+
+        // Pattern C: lat/lng top-level (raw GPS không kèm location object)
+        if (lat == null) {
+          const rC = /"location_latitude"\s*:\s*(-?\d+\.?\d*)\s*,\s*"location_longitude"\s*:\s*(-?\d+\.?\d*)/;
+          m = html.match(rC);
+          if (m) {
+            lat = parseFloat(m[1]); lng = parseFloat(m[2]);
+            if (source === 'html_none') source = 'html_raw_gps';
+          }
+        }
+
+        // Caption từ JSON-LD (legitimate, ổn định)
+        const ldMatch = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
+        if (ldMatch) {
+          try {
+            const ld = JSON.parse(ldMatch[1]);
+            caption = ld.caption || ld.articleBody || '';
+            if (!location) location = ld.contentLocation?.name || null;
+          } catch {}
+        }
+
+        return { shortcode, caption, location, lat, lng, _source: source };
+      } catch (err) {
+        console.warn(`[SocialShield] _fetchPostHtmlDirect ${shortcode} threw:`, err.message);
+        return null;
+      }
     },
 
     /**
