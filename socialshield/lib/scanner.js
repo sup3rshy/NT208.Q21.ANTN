@@ -15,8 +15,12 @@ const SocialShieldScanner = {
     if (!text) return [];
     const findings = [];
 
-    // Email addresses
-    const emails = text.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+    // Email addresses. Cho phép khoảng trắng quanh @ hoặc dấu chấm vì một số UI
+    // có thể wrap/format text trong bio khi render.
+    const emailMatches = text.match(/[a-zA-Z0-9._%+\-]+\s*@\s*[a-zA-Z0-9.\-]+\s*\.\s*[a-zA-Z]{2,}/g);
+    const emails = emailMatches
+      ? [...new Set(emailMatches.map(e => e.replace(/\s+/g, '')))]
+      : null;
     if (emails) {
       findings.push({
         type: 'email',
@@ -24,7 +28,7 @@ const SocialShieldScanner = {
         icon: '📧',
         title: 'Email Address Exposed',
         message: `${emails.length} email address(es) found publicly visible`,
-        values: [...new Set(emails)]
+        values: emails
       });
     }
 
@@ -61,8 +65,8 @@ const SocialShieldScanner = {
 
     // Physical addresses (basic patterns)
     const addressPatterns = [
-      /\d+\s+(?:đường|phố|street|st|avenue|ave|road|rd|lane|ln)\s+[A-Za-zÀ-ỹ\s]+/gi,
-      /(?:quận|huyện|district|phường|ward)\s+[A-Za-zÀ-ỹ0-9\s]+/gi
+      /\d+\s+(?:đường|duong|phố|pho|street|st|avenue|ave|road|rd|lane|ln)\s+[A-Za-zÀ-ỹ\s]+/gi,
+      /(?:quận|quan|huyện|huyen|district|phường|phuong|ward)\s+[A-Za-zÀ-ỹ0-9\s]+/gi
     ];
     for (const pattern of addressPatterns) {
       const addresses = text.match(pattern);
@@ -250,7 +254,7 @@ const SocialShieldScanner = {
     //  - PHẢI có hậu tố quận/phường/ward/district để confirm là địa chỉ thật,
     //    không phải đoạn text bất kỳ chứa số + "street".
     const detailedAddr = text.match(
-      /\b\d{1,4}[A-Za-z]?(?:\s*\/\s*\d+)?\s+(?:đường|phố|street|road)\s+[A-ZĐ][\wÀ-ỹ\s]{2,30},?\s*(?:phường|quận|huyện|p\.|q\.|h\.|ward|district)\s+[\wÀ-ỹ0-9\s]{1,30}/gi
+      /\b\d{1,4}[A-Za-z]?(?:\s*\/\s*\d+)?\s+(?:đường|duong|phố|pho|street|road)\s+[\wÀ-ỹ\s]{2,30},?\s*(?:phường|phuong|quận|quan|huyện|huyen|p\.|q\.|h\.|ward|district)\s+[\wÀ-ỹ0-9\s]{1,30}/gi
     );
     if (detailedAddr) {
       findings.push({
@@ -260,6 +264,22 @@ const SocialShieldScanner = {
         title: 'Detailed Address',
         message: 'Địa chỉ cụ thể có thể bị dùng để stalking hoặc swatting',
         values: [...new Set(detailedAddr)].slice(0, 3)
+      });
+    }
+
+    // Khu dân cư / chung cư / landmark. Không đủ chính xác như địa chỉ nhà,
+    // nhưng vẫn là location clue hữu ích cho doxxing/stalking.
+    const locationArea = text.match(
+      /\b(?:vinhomes?|vinhome|grand\s*park|khu\s*đô\s*thị|kdt|chung\s*cư|căn\s*hộ|apartment|residence|residences|tower|landmark\s*81|masteri|the\s*metropole|sunrise\s*city)[\wÀ-ỹ\s.-]{0,40}/gi
+    );
+    if (locationArea) {
+      findings.push({
+        type: 'location_area',
+        severity: 'medium',
+        icon: '📍',
+        title: 'Residential Area / Landmark Mentioned',
+        message: 'Khu vực sinh sống/làm việc có thể hỗ trợ attacker thu hẹp vị trí mục tiêu',
+        values: [...new Set(locationArea.map(v => v.trim()))].slice(0, 5)
       });
     }
 
@@ -627,8 +647,11 @@ const SocialShieldScanner = {
    * @returns {Object} kết quả kiểm tra
    */
   checkLink(url) {
+    const originalUrl = url;
+    url = this.unwrapSocialRedirectUrl(url);
     const result = {
       url,
+      originalUrl: originalUrl !== url ? originalUrl : undefined,
       safe: true,
       warnings: [],
       score: 100 // 100 = safe, 0 = dangerous
@@ -636,6 +659,15 @@ const SocialShieldScanner = {
 
     try {
       const parsed = new URL(url);
+
+      if (result.originalUrl) {
+        result.warnings.push({
+          type: 'redirect_wrapper',
+          severity: 'low',
+          message: 'Social media redirect wrapper detected - checked final destination URL'
+        });
+        result.score -= 5;
+      }
 
       // Check URL shorteners (often used for phishing)
       const shorteners = [
@@ -760,6 +792,18 @@ const SocialShieldScanner = {
     return result;
   },
 
+  unwrapSocialRedirectUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      if (host === 'l.instagram.com' || host === 'lm.instagram.com') {
+        const target = parsed.searchParams.get('u');
+        if (target) return decodeURIComponent(target);
+      }
+    } catch {}
+    return url;
+  },
+
   /**
    * Quét tất cả links trên trang hiện tại
    * @param {Document|Element} root - element gốc để quét
@@ -772,13 +816,14 @@ const SocialShieldScanner = {
 
     for (const link of links) {
       const href = link.href;
-      if (!href || href.startsWith('javascript:') || seen.has(href)) continue;
+      if (!href || href.startsWith('javascript:')) continue;
+      const scanHref = this.unwrapSocialRedirectUrl(href);
+      if (seen.has(scanHref)) continue;
       // Bỏ qua links nội bộ Instagram và Twitter/X
-      if (href.startsWith('https://www.instagram.com/') || href.startsWith('https://instagram.com/')) continue;
+      if (scanHref.startsWith('https://www.instagram.com/') || scanHref.startsWith('https://instagram.com/')) continue;
       if (href.startsWith('https://x.com/') || href.startsWith('https://twitter.com/')) continue;
-      if (href.startsWith('https://t.co/')) continue;
 
-      seen.add(href);
+      seen.add(scanHref);
       const result = this.checkLink(href);
       result.element = link;
       result.text = link.textContent.trim().substring(0, 100);
@@ -1668,6 +1713,18 @@ const SocialShieldScanner = {
       canDo.push('Stalking, doorstep harassment, swatting, package interception');
       fix.push({ priority: 'high', action: 'Remove specific addresses — use district level only' });
     }
+    if (findingByType.location_area) {
+      const areas = findingByType.location_area.flatMap(f => f.values || []);
+      knows.push({ category: 'Location', fact: `Residential area / landmark: ${areas.join(', ')}`, source: 'bio/captions' });
+      canDo.push('Narrow down likely living/work area, combine with post times and other platforms for stalking');
+      fix.push({ priority: 'medium', action: 'Avoid naming residential complexes or recurring places in public bio/captions' });
+    }
+    if (findingByType.post_location) {
+      const locations = findingByType.post_location.flatMap(f => f.values || []).filter(Boolean);
+      knows.push({ category: 'Location', fact: `Tagged post location(s): ${locations.join(', ')}`, source: 'post location tags' });
+      canDo.push('Build movement pattern from tagged posts, infer home/work/school area from repeated locations');
+      fix.push({ priority: 'high', action: 'Remove precise location tags from personal posts; avoid tagging places in real time' });
+    }
     if (findingByType.vn_license_plate) {
       knows.push({ category: 'Vehicle', fact: 'License plate visible', source: 'photos/captions' });
       canDo.push('Vehicle owner lookup, location tracking from public traffic cams/social posts' );
@@ -1735,6 +1792,8 @@ const SocialShieldScanner = {
     riskScore += knows.length * 8;
     if (findingByType.national_id || findingByType.passport) riskScore += 30;
     if (findingByType.detailed_address) riskScore += 20;
+    if (findingByType.location_area) riskScore += 10;
+    if (findingByType.post_location) riskScore += 15;
     if (findingByType.bank_account || findingByType.credit_card) riskScore += 25;
     if (findingByType.api_token) riskScore += 25;
     if (breachData && breachData.length > 0) riskScore += 15;

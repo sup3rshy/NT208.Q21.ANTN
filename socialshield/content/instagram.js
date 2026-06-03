@@ -620,10 +620,12 @@
     // ==================== Privacy Scan ====================
 
     async runPrivacyScan() {
-      const profile = this.getCurrentProfile();
+      const profile = this.getCurrentProfile() || this.getVisiblePostOwner();
       this.notify('Scanning profile for privacy risks...', 'info');
 
-      // Thu thập text từ trang profile
+      // Thu thập text từ trang profile. Instagram thường đổi DOM, nên không
+      // chỉ dựa vào header section; lấy thêm post/article đang hiển thị thay
+      // vì quét toàn bộ main để tránh false positive.
       const bioSection = document.querySelector('header section') ||
         document.querySelector('[class*="Header"]') ||
         document.querySelector('main header');
@@ -633,16 +635,13 @@
         bioText = bioSection.innerText || bioSection.textContent || '';
       }
 
-      // Fallback: lấy tất cả text trong main area
-      if (!bioText) {
-        const main = document.querySelector('main') || document.body;
-        bioText = main.innerText.substring(0, 5000);
-      }
+      const visiblePostTexts = this._collectVisiblePostTexts(profile);
 
       // Lấy captions của recent posts từ background API → scan sâu hơn bio
       let recentCaptions = [];
       let recentPosts = [];
       let displayName = '';
+      let apiBio = '';
       try {
         const info = await chrome.runtime.sendMessage({
           type: 'FETCH_PROFILE_INFO', username: profile
@@ -651,6 +650,7 @@
           recentCaptions = info.recentCaptions || [];
           recentPosts = info.recentPosts || [];
           displayName = info.fullName || '';
+          apiBio = info.bio || '';
           console.log(`[SocialShield] API returned: postCount=${info.postCount}, recentPosts=${recentPosts.length}, isPrivate=${info.isPrivate}`);
         } else {
           console.warn('[SocialShield] FETCH_PROFILE_INFO returned null');
@@ -659,14 +659,32 @@
         console.warn('[SocialShield] FETCH_PROFILE_INFO threw:', err);
       }
 
+      const postScanLimit = this.getCurrentProfile() ? 30 : 12;
+
+      if (recentPosts.length > 0) {
+        recentPosts = await this._enrichRecentPostsFromDirectHtml(recentPosts, postScanLimit);
+        recentCaptions = recentPosts
+          .map(p => p.caption)
+          .filter(c => c && c.trim().length > 0);
+      }
+      recentCaptions = [...new Set([
+        ...recentCaptions,
+        ...visiblePostTexts,
+      ].filter(c => c && c.trim().length > 0))];
+
       // Fallback: nếu API trả rỗng nhưng đang ở profile page, scrape DOM
       if (recentPosts.length === 0) {
         console.log('[SocialShield] API returned 0 posts → trying DOM scrape fallback...');
         try {
-          const scraped = await this._scrapePostsFromDOM(profile);
+          const scraped = await this._scrapePostsFromDOM(profile, postScanLimit);
           console.log(`[SocialShield] DOM scrape result: ${scraped.length} post(s)`);
           if (scraped.length > 0) {
             recentPosts = scraped;
+            recentCaptions = [...new Set([
+              ...recentCaptions,
+              ...scraped.map(p => p.caption),
+              ...visiblePostTexts,
+            ].filter(c => c && c.trim().length > 0))];
             console.log(`[SocialShield] ✓ DOM-scraped ${scraped.length} posts for fallback. Locations:`,
               scraped.map(p => p.location).filter(Boolean));
           }
@@ -692,12 +710,51 @@
         console.warn(`[SocialShield] Both API + DOM scrape returned 0 posts. Nothing cached.`);
       }
 
+      // Instagram thường thay đổi DOM profile. Quét cả bio lấy từ DOM và bio
+      // trả về từ web_profile_info để tránh bỏ sót PII trong bio.
+      // Không scan meta description vì Instagram có thể nhét text gợi ý/cache
+      // không thuộc profile hiện tại, gây false positive số điện thoại.
+      bioText = [...new Set([bioText, apiBio].filter(Boolean))]
+        .join('\n')
+        .substring(0, 5000);
+      console.log('[SocialShield] Privacy scan text lengths:', {
+        headerBio: bioSection ? ((bioSection.innerText || bioSection.textContent || '').length) : 0,
+        apiBio: apiBio.length,
+        visiblePosts: visiblePostTexts.length,
+        finalText: bioText.length,
+        captions: recentCaptions.length
+      });
+
       // Deep scan: bio + displayName + tất cả captions (recon tools không thấy được)
       const findings = SocialShieldScanner.scanFullProfile({
         bio: bioText,
         displayName,
         captions: recentCaptions,
       });
+      console.log('[SocialShield] Privacy findings with sources:',
+        findings.map(f => ({
+          type: f.type,
+          values: f.values,
+          sources: f.sources || f.source || null
+        }))
+      );
+
+      const locationFindings = recentPosts
+        .filter(p => p.location || (p.lat != null && p.lng != null))
+        .map((p, index) => ({
+          type: 'post_location',
+          severity: 'medium',
+          icon: '📍',
+          title: 'Post Location Tag Exposed',
+          message: `Post #${index + 1} exposes a location tag${p.location ? `: ${p.location}` : ''}`,
+          values: [
+            p.location || 'GPS location',
+            p.lat != null && p.lng != null ? `${p.lat}, ${p.lng}` : null,
+            p.shortcode ? `post: ${p.shortcode}` : null
+          ].filter(Boolean),
+          source: `post#${index + 1}`
+        }));
+      findings.push(...locationFindings);
 
       // AI Text Analysis - phân tích bio có dấu hiệu scam/phishing không
       try {
@@ -791,7 +848,7 @@
       }
 
       // Thu thập thêm thông tin profile cho phân tích tổng hợp
-      const profileData = await this.extractProfileData();
+      const profileData = await this.extractProfileData(profile);
       const analysis = SocialShieldScanner.analyzeProfile({
         bio: bioText,
         externalUrl: profileData.externalUrl,
@@ -801,10 +858,22 @@
         postCount: profileData.postCount
       });
 
-      // Merge thêm findings từ AI/breach/password vào analysis
-      analysis.privacyFindings = [...analysis.privacyFindings, ...findings.filter(f =>
-        ['ai_text_analysis', 'email_breach', 'password_exposed', 'password_pwned'].includes(f.type)
-      )];
+      // Merge findings từ deep scan vào analysis. analyzeProfile chỉ quét bio
+      // cơ bản; deep scan còn có displayName/captions và các finding bổ sung.
+      const mergedFindings = [];
+      const seenFinding = new Set();
+      for (const finding of [...analysis.privacyFindings, ...findings]) {
+        const key = [
+          finding.type,
+          finding.severity,
+          (finding.values || []).join('|'),
+          finding.source || ''
+        ].join('::');
+        if (seenFinding.has(key)) continue;
+        seenFinding.add(key);
+        mergedFindings.push(finding);
+      }
+      analysis.privacyFindings = mergedFindings;
 
       // Generate security recommendations
       const recommendations = SocialShieldScanner.generateSecurityRecommendations(
@@ -902,6 +971,259 @@
       });
     },
 
+    _collectPostShortcodes(limit = 12) {
+      const shortcodes = new Set();
+
+      const current = window.location.pathname.match(/^\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
+      if (current) shortcodes.add(current[1]);
+
+      const allLinks = document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]');
+      for (const a of allLinks) {
+        const href = a.getAttribute('href') || '';
+        const m = href.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+        if (m) shortcodes.add(m[2]);
+        if (shortcodes.size >= limit) break;
+      }
+
+      if (shortcodes.size < limit) {
+        const scripts = document.querySelectorAll('script:not([src])');
+        for (const s of scripts) {
+          const text = s.textContent || '';
+          const matches = text.matchAll(/"shortcode":"([A-Za-z0-9_-]+)"/g);
+          for (const m of matches) {
+            shortcodes.add(m[1]);
+            if (shortcodes.size >= limit) break;
+          }
+          if (shortcodes.size >= limit) break;
+        }
+      }
+
+      return [...shortcodes].slice(0, limit);
+    },
+
+    async _collectProfilePostShortcodesByScrolling(limit = 30) {
+      const profile = this.getCurrentProfile();
+      if (!profile) return this._collectPostShortcodes(limit);
+
+      const originalY = window.scrollY;
+      const found = new Set(this._collectPostShortcodes(limit));
+      let stableRounds = 0;
+
+      for (let round = 0; round < 8 && found.size < limit; round++) {
+        const before = found.size;
+        window.scrollTo(0, document.body.scrollHeight);
+        await new Promise(resolve => setTimeout(resolve, 900));
+
+        for (const shortcode of this._collectPostShortcodes(limit)) {
+          found.add(shortcode);
+          if (found.size >= limit) break;
+        }
+
+        if (found.size === before) stableRounds++;
+        else stableRounds = 0;
+        if (stableRounds >= 2) break;
+      }
+
+      window.scrollTo(0, originalY);
+      const result = [...found].slice(0, limit);
+      console.log(`[SocialShield] Profile post collector: ${result.length}/${limit} shortcode(s) collected`);
+      return result;
+    },
+
+    _sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    },
+
+    async _waitUntil(predicate, timeoutMs = 3000, stepMs = 150) {
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        try {
+          if (predicate()) return true;
+        } catch {}
+        await this._sleep(stepMs);
+      }
+      return false;
+    },
+
+    async _findPostLinkByShortcode(shortcode) {
+      const selectors = [
+        `a[href*="/p/${shortcode}/"]`,
+        `a[href*="/reel/${shortcode}/"]`,
+        `a[href*="/tv/${shortcode}/"]`,
+      ];
+
+      for (let round = 0; round < 8; round++) {
+        for (const selector of selectors) {
+          const link = document.querySelector(selector);
+          if (link) return link;
+        }
+        window.scrollBy(0, Math.max(window.innerHeight * 0.8, 500));
+        await this._sleep(600);
+      }
+
+      return null;
+    },
+
+    _collectOpenPostText() {
+      const roots = [
+        ...document.querySelectorAll('div[role="dialog"] article'),
+        ...document.querySelectorAll('main article'),
+        ...document.querySelectorAll('article'),
+      ];
+      const texts = [];
+      const seen = new Set();
+
+      for (const root of roots) {
+        const rect = root.getBoundingClientRect?.();
+        if (rect && (rect.width === 0 || rect.height === 0)) continue;
+
+        const text = (root.innerText || root.textContent || '').trim();
+        if (!text || text.length < 5) continue;
+        const normalized = text.replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        texts.push(normalized);
+      }
+
+      return texts.join('\n\n---\n\n');
+    },
+
+    async _collectCaptionsByOpeningProfilePosts(shortcodes, limit = 12) {
+      if (!this.getCurrentProfile() || !Array.isArray(shortcodes) || shortcodes.length === 0) {
+        return new Map();
+      }
+
+      const originalUrl = location.href;
+      const originalY = window.scrollY;
+      const captions = new Map();
+      const candidates = shortcodes.slice(0, limit);
+
+      for (const shortcode of candidates) {
+        const beforeUrl = location.href;
+        const link = await this._findPostLinkByShortcode(shortcode);
+        if (!link) {
+          console.log(`[SocialShield] modal caption scan: ${shortcode} link not found in profile DOM`);
+          continue;
+        }
+
+        link.scrollIntoView({ block: 'center', inline: 'nearest' });
+        await this._sleep(300);
+        link.click();
+
+        await this._waitUntil(() =>
+          location.pathname.includes(`/${shortcode}`) ||
+          !!document.querySelector('div[role="dialog"] article'),
+          4500
+        );
+        await this._sleep(700);
+
+        const text = this._collectOpenPostText();
+        if (text) captions.set(shortcode, text);
+        console.log(`[SocialShield] modal caption scan: ${shortcode} text=${text.length}`);
+
+        if (location.href !== beforeUrl || document.querySelector('div[role="dialog"]')) {
+          window.history.back();
+          await this._waitUntil(() =>
+            location.href === beforeUrl ||
+            !!this.getCurrentProfile(),
+            4500
+          );
+          await this._sleep(500);
+        }
+      }
+
+      if (location.href !== originalUrl && this.getCurrentProfile()) {
+        window.history.replaceState(history.state, '', originalUrl);
+      }
+      window.scrollTo(0, originalY);
+      console.log(`[SocialShield] modal caption scan collected ${captions.size}/${candidates.length} post(s)`);
+      return captions;
+    },
+
+    async _fetchPostDetailSilently(shortcode) {
+      if (!shortcode) return null;
+
+      try {
+        const detail = await chrome.runtime.sendMessage({
+          type: 'FETCH_POST_DETAIL',
+          shortcode
+        });
+        if (detail && (detail.caption || detail.location || detail.lat != null)) {
+          return { ...detail, _source: detail._source || 'background_media_info' };
+        }
+      } catch (err) {
+        console.warn(`[SocialShield] FETCH_POST_DETAIL ${shortcode} failed:`, err.message);
+      }
+
+      return await this._fetchPostHtmlDirect(shortcode);
+    },
+
+    async _enrichRecentPostsFromDirectHtml(posts, limit = 12) {
+      const existingPosts = Array.isArray(posts) ? posts : [];
+      const byShortcode = new Map();
+
+      for (const post of existingPosts) {
+        if (post?.shortcode) byShortcode.set(post.shortcode, post);
+      }
+      for (const shortcode of await this._collectProfilePostShortcodesByScrolling(limit)) {
+        if (!byShortcode.has(shortcode)) byShortcode.set(shortcode, { shortcode });
+      }
+
+      const shortcodes = [...byShortcode.keys()].slice(0, limit);
+      if (shortcodes.length === 0) return existingPosts;
+
+      const enriched = [...existingPosts];
+      const needsModal = [];
+      const silentDetails = new Map();
+      const allowVisualModalFallback = false;
+
+      for (const shortcode of shortcodes) {
+        const detail = await this._fetchPostDetailSilently(shortcode);
+        if (detail) silentDetails.set(shortcode, detail);
+
+        const base = byShortcode.get(shortcode) || {};
+        const hasCaption = !!((detail?.caption || base.caption || '').trim());
+        if (!hasCaption) needsModal.push(shortcode);
+      }
+
+      let modalCaptions = new Map();
+      if (needsModal.length > 0) {
+        if (allowVisualModalFallback) {
+          console.log(`[SocialShield] Silent scan missing caption for ${needsModal.length} post(s); using modal fallback`);
+          modalCaptions = await this._collectCaptionsByOpeningProfilePosts(needsModal, Math.min(needsModal.length, limit));
+        } else {
+          console.log(`[SocialShield] Silent scan missing caption for ${needsModal.length} post(s); visual modal fallback skipped`);
+        }
+      } else {
+        console.log(`[SocialShield] Silent scan collected captions for all ${shortcodes.length} post(s); modal fallback skipped`);
+      }
+
+      let changed = 0;
+      for (const shortcode of shortcodes) {
+        const detail = silentDetails.get(shortcode) || null;
+        const modalCaption = modalCaptions.get(shortcode) || '';
+        if (!detail && !modalCaption) continue;
+
+        const index = enriched.findIndex(p => p.shortcode === shortcode);
+        const base = index >= 0 ? enriched[index] : { shortcode };
+        const merged = {
+          ...base,
+          caption: modalCaption || detail?.caption || base.caption || '',
+          location: detail?.location || base.location || null,
+          lat: detail?.lat ?? base.lat ?? null,
+          lng: detail?.lng ?? base.lng ?? null,
+          _source: modalCaption ? 'modal_dom' : (detail?._source || base._source || 'api'),
+        };
+
+        if (index >= 0) enriched[index] = merged;
+        else enriched.push(merged);
+        changed++;
+      }
+
+      console.log(`[SocialShield] Enriched ${changed}/${shortcodes.length} post(s) silently`);
+      return enriched;
+    },
+
     /**
      * Scrape post shortcodes từ DOM của profile page, sau đó fetch từng post
      * qua oEmbed-like endpoint để extract location.
@@ -911,43 +1233,46 @@
      * Bước 2: Với mỗi shortcode (max 12), fetch GraphQL post info bằng cookies hiện tại.
      * Bước 3: Trả về list { shortcode, location, caption, ... } tương thích với schema recentPosts.
      */
-    async _scrapePostsFromDOM(username) {
-      const allLinks = document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]');
-      console.log(`[SocialShield] DOM scrape: found ${allLinks.length} candidate <a> tags`);
-
-      const shortcodes = new Set();
-      for (const a of allLinks) {
-        const href = a.getAttribute('href') || '';
-        const m = href.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
-        if (m) shortcodes.add(m[2]);
-        if (shortcodes.size >= 12) break;
-      }
-      console.log(`[SocialShield] DOM scrape: extracted ${shortcodes.size} unique shortcodes:`, [...shortcodes]);
-
-      if (shortcodes.size === 0) {
-        const scripts = document.querySelectorAll('script:not([src])');
-        for (const s of scripts) {
-          const text = s.textContent || '';
-          const matches = text.matchAll(/"shortcode":"([A-Za-z0-9_-]+)"/g);
-          for (const m of matches) {
-            shortcodes.add(m[1]);
-            if (shortcodes.size >= 12) break;
-          }
-          if (shortcodes.size >= 12) break;
-        }
-        console.log(`[SocialShield] DOM scrape script-tag fallback: ${shortcodes.size} shortcodes`);
-        if (shortcodes.size === 0) return [];
-      }
+    async _scrapePostsFromDOM(username, limit = 12) {
+      const shortcodes = await this._collectProfilePostShortcodesByScrolling(limit);
+      console.log(`[SocialShield] DOM scrape: extracted ${shortcodes.length} unique shortcodes:`, shortcodes);
+      if (shortcodes.length === 0) return [];
 
       // Fetch HTML của từng post page DIRECTLY từ content script — same-origin
       // nên cookies tự động kèm theo (background SW phải build cookie header
       // thủ công, dễ thiếu session token).
       const posts = [];
+      const silentDetails = new Map();
+      const needsModal = [];
+      const allowVisualModalFallback = false;
+
       for (const shortcode of shortcodes) {
-        const detail = await this._fetchPostHtmlDirect(shortcode);
-        if (detail) {
-          posts.push({ ...detail, _scraped: true });
-          console.log(`[SocialShield]   post ${shortcode}: location=${detail.location || '∅'} lat=${detail.lat ?? '∅'} lng=${detail.lng ?? '∅'} (source: ${detail._source})`);
+        const detail = await this._fetchPostDetailSilently(shortcode);
+        if (detail) silentDetails.set(shortcode, detail);
+        if (!detail?.caption) needsModal.push(shortcode);
+      }
+
+      let modalCaptions = new Map();
+      if (needsModal.length > 0) {
+        if (allowVisualModalFallback) {
+          console.log(`[SocialShield] Silent fallback missing caption for ${needsModal.length} post(s); using modal fallback`);
+          modalCaptions = await this._collectCaptionsByOpeningProfilePosts(needsModal, Math.min(needsModal.length, limit));
+        } else {
+          console.log(`[SocialShield] Silent fallback missing caption for ${needsModal.length} post(s); visual modal fallback skipped`);
+        }
+      }
+
+      for (const shortcode of shortcodes) {
+        const detail = silentDetails.get(shortcode) || null;
+        const modalCaption = modalCaptions.get(shortcode) || '';
+        if (detail || modalCaption) {
+          posts.push({
+            ...(detail || { shortcode }),
+            caption: modalCaption || detail?.caption || '',
+            _scraped: true,
+            _source: modalCaption ? 'modal_dom' : detail?._source
+          });
+          console.log(`[SocialShield]   post ${shortcode}: location=${detail?.location || '∅'} lat=${detail?.lat ?? '∅'} lng=${detail?.lng ?? '∅'} (source: ${modalCaption ? 'modal_dom' : detail?._source})`);
         } else {
           console.log(`[SocialShield]   post ${shortcode}: HTML fetch failed`);
         }
@@ -964,6 +1289,7 @@
       try {
         const res = await fetch(`/p/${shortcode}/`, {
           credentials: 'include',
+          cache: 'no-store',
           headers: { 'Accept': 'text/html', 'Sec-Fetch-Site': 'same-origin' },
         });
         if (!res.ok) {
@@ -1012,6 +1338,10 @@
           } catch {}
         }
 
+        if (!caption) {
+          caption = this._extractCaptionFromPostHtml(html);
+        }
+
         return { shortcode, caption, location, lat, lng, _source: source };
       } catch (err) {
         console.warn(`[SocialShield] _fetchPostHtmlDirect ${shortcode} threw:`, err.message);
@@ -1019,11 +1349,80 @@
       }
     },
 
+    _decodeEmbeddedText(value) {
+      if (!value) return '';
+      let out = String(value);
+      try {
+        out = out
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+          .replace(/\\n/g, '\n')
+          .replace(/\\"/g, '"')
+          .replace(/\\\//g, '/')
+          .replace(/&amp;/g, '&')
+          .replace(/&quot;/g, '"')
+          .replace(/&#x27;|&#39;/g, "'")
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>');
+      } catch {}
+      return out.trim();
+    },
+
+    _extractCaptionFromPostHtml(html) {
+      const patterns = [
+        /"edge_media_to_caption"\s*:\s*\{\s*"edges"\s*:\s*\[\s*\{\s*"node"\s*:\s*\{\s*"text"\s*:\s*"((?:\\.|[^"\\])*)"/,
+        /"caption"\s*:\s*\{\s*"text"\s*:\s*"((?:\\.|[^"\\])*)"/,
+        /"caption"\s*:\s*"((?:\\.|[^"\\])*)"/,
+        /"accessibility_caption"\s*:\s*"((?:\\.|[^"\\])*)"/,
+        /"description"\s*:\s*"((?:\\.|[^"\\])*)"/,
+      ];
+
+      for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match?.[1]) {
+          const decoded = this._decodeEmbeddedText(match[1]);
+          if (decoded && !/^Photo by /i.test(decoded)) return decoded;
+        }
+      }
+
+      return '';
+    },
+
+    _collectVisiblePostTexts(profile) {
+      const roots = [
+        ...document.querySelectorAll('div[role="dialog"] article'),
+        ...document.querySelectorAll('main article'),
+        ...document.querySelectorAll('article'),
+      ];
+      const seen = new Set();
+      const out = [];
+      const piiPattern = /[a-zA-Z0-9._%+\-]+\s*@\s*[a-zA-Z0-9.\-]+\s*\.\s*[a-zA-Z]{2,}|(?:\+84|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-46-9])\d{7}/;
+
+      for (const root of roots) {
+        const rect = root.getBoundingClientRect?.();
+        if (rect && (rect.width === 0 || rect.height === 0)) continue;
+
+        const text = (root.innerText || root.textContent || '').trim();
+        if (!text || text.length < 5) continue;
+
+        const relevant = !profile ||
+          text.toLowerCase().includes(String(profile).toLowerCase()) ||
+          piiPattern.test(text);
+        if (!relevant) continue;
+
+        const normalized = text.replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').slice(0, 3000);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        out.push(normalized);
+      }
+
+      return out;
+    },
+
     /**
      * Lấy profile data qua Background API (stable, không phụ thuộc DOM)
      */
-    async extractProfileData() {
-      const profile = this.getCurrentProfile();
+    async extractProfileData(profileOverride = null) {
+      const profile = profileOverride || this.getCurrentProfile();
       if (!profile) {
         return {
           externalUrl: null, isPrivate: false,
@@ -1300,6 +1699,36 @@
         ]);
         if (!nonProfilePaths.has(match[1])) return match[1];
       }
+      return null;
+    },
+
+    getVisiblePostOwner() {
+      const nonProfilePaths = new Set([
+        'explore', 'reels', 'direct', 'accounts', 'stories',
+        'p', 'tv', 'reel', 'tags', 'locations', 'nametag'
+      ]);
+      const links = document.querySelectorAll(
+        'div[role="dialog"] article header a[href^="/"], ' +
+        'main article header a[href^="/"], ' +
+        'article header a[href^="/"], ' +
+        'div[role="dialog"] article a[href^="/"], ' +
+        'main article a[href^="/"]'
+      );
+
+      for (const a of links) {
+        const href = a.getAttribute('href') || '';
+        const match = href.match(/^\/([a-zA-Z0-9._]{1,30})\/?$/);
+        if (!match) continue;
+        const username = match[1];
+        if (nonProfilePaths.has(username)) continue;
+
+        const text = (a.textContent || '').trim();
+        if (!text || text.toLowerCase().includes(username.toLowerCase()) || href === `/${username}/`) {
+          console.log(`[SocialShield] Inferred post owner from visible article: ${username}`);
+          return username;
+        }
+      }
+
       return null;
     },
 
