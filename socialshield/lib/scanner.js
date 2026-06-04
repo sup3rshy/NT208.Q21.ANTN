@@ -289,6 +289,62 @@ const SocialShieldScanner = {
       });
     }
 
+    // Hometown / current city — field intro của Facebook ("From X", "Lives in X")
+    // và biến thể tiếng Việt. Bắt được cả text hiển thị lẫn JSON ("text":"From X").
+    // Là location clue mạnh VÀ thường là đáp án câu hỏi bảo mật ("thành phố quê?").
+    // Yêu cầu địa danh viết hoa ngay sau prefix → tránh "From the/now/Monday:".
+    // Lookbehind thay cho \b: \b dùng \w (ASCII) nên fail trước "Đến" (Đ non-ASCII).
+    const hometownMatches = text.match(
+      /(?<![A-Za-zÀ-ỹĐ])(?:From|Lives in|Lived in|Đến từ|Sống tại|Quê quán)\s+([A-ZĐ][A-Za-zÀ-ỹ.'’-]+(?:[ ,]+[A-ZĐ][A-Za-zÀ-ỹ.'’-]+){0,3})/g
+    );
+    if (hometownMatches) {
+      findings.push({
+        type: 'hometown',
+        severity: 'medium',
+        icon: '🏠',
+        title: 'Hometown / Current City',
+        message: 'Quê quán / nơi ở (intro Facebook) — thu hẹp vị trí & là đáp án câu hỏi bảo mật phổ biến',
+        values: [...new Set(hometownMatches.map(v => v.trim()))].slice(0, 5)
+      });
+    }
+
+    // ===== Facebook intro/about fields (Title-Case) — work, education, relationship, alias, views.
+    // Bắt cả text hiển thị lẫn JSON ("text":"Works at X"). Case-sensitive để khớp nhãn FB và
+    // giảm false-positive; địa danh/tên bắt buộc viết hoa ngay sau prefix. Lookbehind Unicode-safe.
+    {
+      const LB = `(?<![A-Za-zÀ-ỹĐ])`;
+      const PLACE = `([A-ZĐ][A-Za-zÀ-ỹ0-9.&'’-]*(?:[ ,]+(?:of |the |de |van |von )?[A-ZĐ0-9][A-Za-zÀ-ỹ0-9.&'’-]*){0,5})`;
+      const PERSON = `([A-ZĐ][A-Za-zÀ-ỹ.'’-]+(?:[ ,]+[A-ZĐ][A-Za-zÀ-ỹ.'’-]*){0,3})`;
+      const pushIntro = (pattern, type, severity, icon, title, message) => {
+        const m = text.match(new RegExp(pattern, 'g'));
+        if (m) findings.push({
+          type, severity, icon, title, message,
+          values: [...new Set(m.map(v => v.replace(/\s+/g, ' ').trim()))].slice(0, 6)
+        });
+      };
+      // Work + education → gộp vào finding 'school_or_work' (đã có xử lý doxxing: pretexting/spear-phish)
+      pushIntro(
+        `${LB}(?:Works at|Worked at|Work at|Founder (?:at|of)|Co-?founder (?:at|of)|Owner at|Self-employed at|Studies at|Studied at|Study at|Went to|Graduated from|Làm việc tại|Từng làm tại|Làm tại|Học tại|Từng học tại|Tốt nghiệp(?: từ)?)\\s+${PLACE}`,
+        'school_or_work', 'low', '🏢', 'School / Workplace Mentioned',
+        'Nơi học/làm (intro FB) — hỗ trợ pretexting & spear-phishing'
+      );
+      pushIntro(
+        `${LB}(?:Married to|In a relationship with|Engaged to|Separated from|Divorced from|Đã kết hôn với|Hẹn hò với|Đính hôn với)\\s+${PERSON}`,
+        'relationship', 'medium', '💑', 'Relationship / Partner',
+        'Đối tác/quan hệ — pivot sang người thân, romance-scam, đáp án câu hỏi bảo mật'
+      );
+      pushIntro(
+        `${LB}(?:Other names?|Also known as|A\\.?K\\.?A\\.?|Nicknames?|Goes by|Former name|Maiden name|Tên khác|Biệt danh|Còn gọi là)\\s*:?\\s+${PERSON}`,
+        'alias', 'medium', '🪪', 'Alias / Other Name',
+        'Tên khác/biệt danh — mở rộng footprint, lần ra tài khoản khác'
+      );
+      pushIntro(
+        `${LB}(?:Religious views?|Religion|Political views?|Quan điểm tôn giáo|Quan điểm chính trị|Tôn giáo)\\s*:?\\s+${PERSON}`,
+        'personal_view', 'low', '🗣️', 'Religious / Political View',
+        'Quan điểm tôn giáo/chính trị — dùng cho social engineering nhắm mục tiêu'
+      );
+    }
+
     // Family relations - tag mẹ/bố/anh/em → suy ra họ thật & gia đình
     const familyTag = text.match(/(?:mẹ|me|bố|ba|cha|anh trai|chị gái|em gái|em trai|mom|dad|sister|brother)[\s:]+@[a-zA-Z0-9._]+/gi);
     if (familyTag) {
@@ -1788,11 +1844,11 @@ const SocialShieldScanner = {
           'Spray mật khẩu lên mọi site phát hiện ở footprint',
           'Ưu tiên tài khoản chưa bật 2FA', 'Pivot reset email nếu trùng mật khẩu'] });
     }
-    if (has('email') && has('dob')) {
+    if (has('email') && (has('dob') || has('hometown'))) {
       chains.push({ name: 'Account-Recovery Abuse', severity: 'high',
-        why: 'Email + ngày sinh đủ vượt câu hỏi bảo mật (KBA)',
+        why: 'Email + ngày sinh/quê quán đủ vượt câu hỏi bảo mật (KBA)',
         steps: ['Trigger "quên mật khẩu" ở dịch vụ mục tiêu',
-          'Trả lời câu hỏi bảo mật bằng ngày sinh/tên đã lộ', 'Reset & chiếm tài khoản'] });
+          'Trả lời câu hỏi bảo mật bằng ngày sinh/quê quán/tên đã lộ', 'Reset & chiếm tài khoản'] });
     }
     if (name && (has('school_or_work') || has('email'))) {
       chains.push({ name: 'Spear-Phishing / Pretexting', severity: 'high',
@@ -1817,11 +1873,11 @@ const SocialShieldScanner = {
           'Đối chiếu ảnh (pHash) xác nhận cùng người',
           'Dựng timeline & pattern-of-life từ giờ/địa điểm post'] });
     }
-    if (has('detailed_address') || has('vn_license_plate') || has('location_area') || has('post_location')) {
+    if (has('detailed_address') || has('vn_license_plate') || has('location_area') || has('post_location') || has('hometown')) {
       const hardSignal = has('detailed_address') || has('post_location');
       chains.push({ name: 'Physical Targeting / Stalking',
         severity: hardSignal ? 'high' : 'medium',
-        why: 'Địa chỉ/biển số/khu dân cư/location tag lộ → định vị thực địa',
+        why: 'Địa chỉ/biển số/khu dân cư/location tag/quê quán lộ → định vị thực địa',
         steps: ['Geocode địa chỉ & khu dân cư; tra biển số nếu có',
           'Gộp các location tag lặp lại → suy ra nhà/trường/nơi làm',
           'Dựng pattern-of-life từ giờ & vị trí post',
@@ -2011,6 +2067,29 @@ const SocialShieldScanner = {
       canDo.push('Build movement pattern from tagged posts, infer home/work/school area from repeated locations');
       fix.push({ priority: 'high', action: 'Remove precise location tags from personal posts; avoid tagging places in real time' });
     }
+    if (findingByType.hometown) {
+      const towns = findingByType.hometown.flatMap(f => f.values || []);
+      knows.push({ category: 'Location', fact: `Hometown / city: ${towns.join(', ')}`, source: 'profile intro' });
+      canDo.push('Narrow geographic targeting; answer "hometown/birthplace" security questions; localize phishing pretext');
+      fix.push({ priority: 'medium', action: 'Ẩn quê quán/nơi ở trong intro; không dùng làm câu hỏi bảo mật' });
+    }
+    if (findingByType.relationship) {
+      const rels = findingByType.relationship.flatMap(f => f.values || []);
+      knows.push({ category: 'Relationships', fact: `Partner / relationship: ${rels.join(', ')}`, source: 'profile intro' });
+      canDo.push('Pivot to partner account (often less secured); romance/emotional-manipulation pretext; relationship-based security questions');
+      fix.push({ priority: 'medium', action: 'Ẩn tình trạng quan hệ & tên đối tác trong intro' });
+    }
+    if (findingByType.alias) {
+      const aliases = findingByType.alias.flatMap(f => f.values || []);
+      knows.push({ category: 'Identity', fact: `Alias / other name: ${aliases.join(', ')}`, source: 'profile intro' });
+      canDo.push('Expand footprint via alternate names; correlate other accounts/usernames');
+      fix.push({ priority: 'low', action: 'Gỡ tên khác/biệt danh công khai nếu không cần' });
+    }
+    if (findingByType.personal_view) {
+      knows.push({ category: 'Profile', fact: 'Religious / political view exposed', source: 'profile intro' });
+      canDo.push('Targeted social engineering aligned to beliefs; community-based pretext');
+      fix.push({ priority: 'low', action: 'Ẩn quan điểm tôn giáo/chính trị khỏi public profile' });
+    }
     if (findingByType.vn_license_plate) {
       knows.push({ category: 'Vehicle', fact: 'License plate visible', source: 'photos/captions' });
       canDo.push('Vehicle owner lookup, location tracking from public traffic cams/social posts' );
@@ -2080,6 +2159,10 @@ const SocialShieldScanner = {
     if (findingByType.detailed_address) riskScore += 20;
     if (findingByType.location_area) riskScore += 10;
     if (findingByType.post_location) riskScore += 15;
+    if (findingByType.hometown) riskScore += 8;
+    if (findingByType.relationship) riskScore += 6;
+    if (findingByType.alias) riskScore += 6;
+    if (findingByType.personal_view) riskScore += 4;
     if (findingByType.bank_account || findingByType.credit_card) riskScore += 25;
     if (findingByType.api_token) riskScore += 25;
     if (breachData && breachData.length > 0) riskScore += 15;
