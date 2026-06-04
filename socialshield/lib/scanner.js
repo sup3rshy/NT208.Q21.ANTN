@@ -28,8 +28,9 @@ const SocialShieldScanner = {
       });
     }
 
-    // Vietnamese phone numbers
-    const vnPhones = text.match(/(?:\+84|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-46-9])\d{7}/g);
+    // Vietnamese phone numbers — chấp nhận separator (space/dot/dash) giữa các cụm số,
+    // vì bio thường viết "0369 332 175", "036.933.2175". +84 cho phép space sau mã vùng.
+    const vnPhones = text.match(/(?:\+84[\s.]?|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-46-9])(?:[\s.\-]?\d){7}/g);
     if (vnPhones) {
       findings.push({
         type: 'phone_vn',
@@ -93,10 +94,11 @@ const SocialShieldScanner = {
       });
     }
 
-    // Date of birth patterns
+    // Date of birth patterns — pattern không-context giới hạn ngày 1-31, tháng 1-12,
+    // năm 1930-2019 để giảm false-positive (tránh match ngày sự kiện 2024/2025…).
     const dobPatterns = [
       /(?:born|sinh|birthday|ngày sinh)[:\s]+\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/gi,
-      /\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}\b/g
+      /\b(0?[1-9]|[12]\d|3[01])[\/\-.](0?[1-9]|1[0-2])[\/\-.](19[3-9]\d|20[01]\d)\b/g
     ];
     for (const pattern of dobPatterns) {
       const dobs = text.match(pattern);
@@ -139,8 +141,12 @@ const SocialShieldScanner = {
       });
     }
 
-    // API keys / tokens (generic patterns)
+    // API keys / tokens (generic + high-signal vendor patterns, near-zero false positive)
     const tokenPatterns = [
+      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/g,
+      /\beyJ[A-Za-z0-9_=-]{8,}\.eyJ[A-Za-z0-9_=-]{8,}\.[A-Za-z0-9_=-]{8,}\b/g,  // JWT
+      /\bAKIA[0-9A-Z]{16}\b/g,                                                   // AWS access key
+      /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,                                         // Slack token
       /(?:api[_-]?key|token|secret|password)[=:\s]+['"]?[A-Za-z0-9_\-]{20,}['"]?/gi,
       /(?:sk|pk)[-_](?:live|test)[-_][A-Za-z0-9]{20,}/g,
       /ghp_[A-Za-z0-9]{36}/g,
