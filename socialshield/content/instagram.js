@@ -624,13 +624,15 @@
       this.notify('Scanning profile for privacy risks...', 'info');
 
       // Thu thập text từ trang profile
-      const bioSection = document.querySelector('header section') ||
-        document.querySelector('[class*="Header"]') ||
-        document.querySelector('main header');
+      // IG header có nhiều <section> (username/buttons, stats, bio).
+      // Chỉ querySelector('header section') sẽ bỏ qua bio → grab toàn bộ <header>.
+      const headerEl = document.querySelector('main header') ||
+        document.querySelector('header') ||
+        document.querySelector('[class*="Header"]');
 
       let bioText = '';
-      if (bioSection) {
-        bioText = bioSection.innerText || bioSection.textContent || '';
+      if (headerEl) {
+        bioText = headerEl.innerText || headerEl.textContent || '';
       }
 
       // Fallback: lấy tất cả text trong main area

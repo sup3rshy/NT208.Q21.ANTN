@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>SocialShield — Slide</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/theme/black.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/plugin/highlight/monokai.css">
+<style>
+:root {
+  --accent: #00d4aa;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --bg: #0a0e1a;
+}
+.reveal { font-family: 'Segoe UI', system-ui, sans-serif; }
+.reveal .slides { text-align: left; }
+.reveal h1, .reveal h2, .reveal h3 { color: var(--accent); font-weight: 700; text-transform: none; letter-spacing: 0; }
+.reveal h1 { font-size: 2em; }
+.reveal h2 { font-size: 1.4em; border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 24px; }
+.reveal h3 { font-size: 1.1em; color: #e2e8f0; }
+.reveal p, .reveal li { font-size: 0.7em; line-height: 1.5; }
+.reveal code { background: rgba(0,212,170,0.1); color: var(--accent); padding: 1px 6px; border-radius: 3px; font-size: 0.85em; }
+.reveal pre { font-size: 0.5em; box-shadow: none; border-radius: 6px; }
+.reveal pre code { padding: 16px; border-radius: 6px; max-height: 500px; }
+.reveal table { font-size: 0.55em; margin: 0 auto; border-collapse: collapse; }
+.reveal table th, .reveal table td { padding: 8px 12px; border: 1px solid #2a3548; }
+.reveal table th { background: rgba(0,212,170,0.15); color: var(--accent); }
+.reveal .small { font-size: 0.5em; color: #94a3b8; }
+.reveal .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.5em; font-weight: 600; }
+.badge.high { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.badge.med { background: rgba(245,158,11,0.2); color: #fcd34d; }
+.badge.low { background: rgba(0,212,170,0.2); color: var(--accent); }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+.card { background: rgba(255,255,255,0.04); border-left: 3px solid var(--accent); padding: 12px 16px; border-radius: 4px; }
+.card.danger { border-left-color: var(--danger); }
+.card.warn { border-left-color: var(--warn); }
+.title-slide { text-align: center; }
+.title-slide h1 { font-size: 2.8em; color: var(--accent); margin-bottom: 12px; }
+.title-slide .sub { font-size: 1em; color: #94a3b8; margin-top: 8px; }
+.title-slide .meta { font-size: 0.6em; color: #64748b; margin-top: 40px; }
+.flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.7em; }
+.flow .step { background: rgba(0,212,170,0.1); border: 1px solid var(--accent); padding: 6px 12px; border-radius: 4px; }
+.flow .arrow { color: var(--accent); }
+.kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; text-align: center; }
+.kpi .num { font-size: 2em; color: var(--accent); font-weight: 700; line-height: 1; }
+.kpi .label { font-size: 0.55em; color: #94a3b8; margin-top: 4px; }
+.reveal section { padding-top: 20px; }
+.shield-icon { font-size: 3em; }
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- TITLE -->
+<section class="title-slide">
+  <div class="shield-icon">🛡️</div>
+  <h1>SocialShield</h1>
+  <div class="sub">Chrome Extension giám sát bảo mật trên IG & X</div>
+  <div class="sub">v1.1 · ~12k dòng JS · tích hợp 6 threat intel API</div>
+  <div class="meta">
+    NT208.Q21.ANTN — Lập trình web<br>
+    Trường ĐH Công nghệ Thông tin — ĐHQG-HCM<br>
+    2026
+  </div>
+</section>
+
+<!-- AGENDA -->
+<section>
+  <h2>Nội dung trình bày</h2>
+  <div class="cols">
+    <div>
+      <p>1. Vấn đề muốn giải quyết</p>
+      <p>2. 3 nhóm người dùng đích</p>
+      <p>3. Kiến trúc tổng thể</p>
+      <p>4. Phần dành cho Threat Intel</p>
+      <p>5. Phần dành cho Red Team</p>
+    </div>
+    <div>
+      <p>6. Phần dành cho người dùng cuối</p>
+      <p>7. Threat model & quyền riêng tư</p>
+      <p>8. pHash & Heatmap chi tiết</p>
+      <p>9. Port sang Firefox</p>
+      <p>10. Demo & Q&A</p>
+    </div>
+  </div>
+</section>
+
+<!-- BỐI CẢNH -->
+<section>
+  <h2>Vấn đề muốn giải quyết</h2>
+  <div class="cols">
+    <div>
+      <div class="card danger">
+        <b>Bio IG/X chứa quá nhiều PII</b><br>
+        <span class="small">SĐT, email, MSSV, biển số xe, MoMo handle được để công khai trong bio mà người dùng không nghĩ là nhạy cảm.</span>
+      </div>
+      <br>
+      <div class="card warn">
+        <b>Ảnh chụp lộ GPS</b><br>
+        <span class="small">EXIF mặc định lưu tọa độ. User up ảnh thẳng lên Zalo/Discord/Telegram không strip → lộ địa chỉ nhà.</span>
+      </div>
+      <br>
+      <div class="card warn">
+        <b>QR thanh toán giả</b><br>
+        <span class="small">Quyên góp, chuyển khoản cộng đồng dễ bị thay QR. Người scan không biết STK đó của ai.</span>
+      </div>
+    </div>
+    <div>
+      <div class="card danger">
+        <b>Tài khoản giả mạo brand</b><br>
+        <span class="small">Đổi 1 ký tự username + copy avatar → nhắn tin lừa follower. Brand không có cách giám sát tự động.</span>
+      </div>
+      <br>
+      <div class="card danger">
+        <b>Username trùng nhau khắp nơi</b><br>
+        <span class="small">Reuse username trên 15+ site → 1 keyword đủ enum toàn bộ digital footprint trong dưới 1 giờ.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- KHOẢNG TRỐNG -->
+<section>
+  <h2>Đã có tool gì rồi?</h2>
+  <table>
+    <thead>
+      <tr><th>Tool</th><th>Làm tốt</th><th>Chưa làm</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Sherlock</td><td>Enum username trên nhiều site</td><td>CLI Python, không phải ai cũng dùng được</td></tr>
+      <tr><td>Have I Been Pwned</td><td>Check email/password đã bị leak</td><td>Phải tự copy email sang web, không tích hợp với scan profile</td></tr>
+      <tr><td>VirusTotal extension</td><td>Check URL độc hại</td><td>Chỉ làm 1 việc, không scan text trong bio</td></tr>
+      <tr><td>DevTools tự làm</td><td>Linh hoạt</td><td>Người dùng phổ thông không biết dùng</td></tr>
+    </tbody>
+  </table>
+  <br><br>
+  <div class="card">
+    Chưa có tool nào gộp đủ thứ trên + chạy ngay trên trang IG/X + nhận diện PII kiểu VN (CCCD, MSSV, biển số xe, VietQR).
+  </div>
+</section>
+
+<!-- 3 PERSONA -->
+<section>
+  <h2>Hướng tới ai?</h2>
+  <div class="cols-3">
+    <div class="card">
+      <div style="font-size: 2em; text-align: center;">🛡️</div>
+      <h3 style="text-align:center;">Threat Intel</h3>
+      <p class="small">SOC ngân hàng/brand cần biết có account nào đang giả mạo brand mình, monitor username trên 15+ site, detect chiến dịch lừa đảo.</p>
+    </div>
+    <div class="card warn">
+      <div style="font-size: 2em; text-align: center;">⚔️</div>
+      <h3 style="text-align:center;">Red Team</h3>
+      <p class="small">Pen-tester làm OSINT trên target hợp đồng: bóc PII, enum footprint, EXIF, geo heatmap. Cần xuất báo cáo "attacker biết gì, làm được gì".</p>
+    </div>
+    <div class="card danger">
+      <div style="font-size: 2em; text-align: center;">👤</div>
+      <h3 style="text-align:center;">Người dùng phổ thông</h3>
+      <p class="small">Sinh viên/người đi làm muốn tự check xem bio/ảnh mình có bị lộ gì không trước khi apply việc hay public profile.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PERSONA OVERLAP -->
+<section>
+  <h2>Threat Intel cũng cần kỹ năng Red Team</h2>
+  <p>Analyst phát hiện ra account giả mạo thì cũng phải làm OSINT ngược lại lên kẻ tấn công để có dossier báo cáo.</p>
+  <br>
+  <h3>Quy trình thực tế</h3>
+  <div class="flow">
+    <span class="step">Footprint Monitor báo account mới khớp pattern brand</span>
+    <span class="arrow">→</span>
+    <span class="step">pHash Diff so avatar, Hamming 4/64 → đúng là clone</span>
+    <span class="arrow">→</span>
+    <span class="step">Bóc PII trên chính account giả: bio, caption, link external</span>
+    <span class="arrow">→</span>
+    <span class="step">Enum username giả trên GitHub/Reddit/dev.to → link identity thật</span>
+    <span class="arrow">→</span>
+    <span class="step">Compile dossier · báo IG/X + cơ quan chức năng</span>
+  </div>
+  <br>
+  <p class="small">Vì lý do này, mọi tính năng red team đều mở cho threat intel persona. Phân nhóm chỉ để giải thích góc nhìn use case.</p>
+</section>
+
+<!-- KIẾN TRÚC -->
+<section>
+  <h2>Kiến trúc tổng thể (Manifest V3)</h2>
+  <pre><code class="language-text">┌─────────────────── CHROME BROWSER ───────────────────┐
+│                                                       │
+│  Content Scripts (IG / X)        Popup UI            │
+│         │                            │                │
+│         └──── chrome.runtime ───────┘                │
+│                       ▼                               │
+│  ┌────────── Service Worker (background) ─────────┐  │
+│  │  InstagramAPI · TwitterAPI · Threat Intel       │  │
+│  │  Alarms · Notifications · Message Router        │  │
+│  └─────────────────────┬───────────────────────────┘  │
+│                        ▼                               │
+│  chrome.storage.local (5MB)                           │
+│                        │                               │
+│                        ▼                               │
+│  Dashboard SPA (10 trang)                             │
+└───────────────────────────────────────────────────────┘
+            │
+            ▼  (tùy chọn, chỉ localhost)
+   AI Server Node.js + Express + OpenAI proxy</code></pre>
+</section>
+
+<!-- FILE STRUCTURE -->
+<section>
+  <h2>Cấu trúc thư mục</h2>
+  <pre><code class="language-text">socialshield/
+├── manifest.json              # MV3, 27 host_permissions
+├── background/
+│   └── service-worker.js      # ~1200 dòng
+├── content/
+│   ├── instagram.js           # ~1400 dòng — capture, scan, DOM scrape, FAB
+│   └── twitter.js             # ~1000 dòng
+├── lib/                       # 11 module engine
+│   ├── scanner.js             # ~1800 dòng — Privacy/Link/Footprint/Linkage/Doxxing
+│   ├── image-analyzer.js      # ~700  dòng — EXIF/QR/CCCD/aHash/pHash/text-blur
+│   ├── text-analyzer.js       # ~400  dòng — AI + scam patterns
+│   ├── privacy-auditor.js     # ~400  dòng — settings + apps page parser
+│   ├── heatmap.js             # ~180  dòng — Canvas + OSM Nominatim
+│   ├── storage.js · diff.js · jsQR.min.js · chart.min.js
+├── dashboard/                 # SPA 10 trang, ~2000 dòng JS
+├── popup/                     # Chế độ generic + quick action
+├── server/                    # Tùy chọn Node.js OpenAI proxy
+└── icons/</code></pre>
+</section>
+
+<!-- THREAT INTEL FEATURES -->
+<section>
+  <h2>Phần cho Threat Intel</h2>
+  <div class="cols">
+    <div>
+      <h3>Username Footprint Enum</h3>
+      <p class="small">Check username trên 15 site cho phép CORS: GitHub, GitLab, Reddit, HN, dev.to, npm, Wikipedia, Keybase, Mastodon, Bluesky, Lichess, Chess.com, Codeforces…</p>
+      <p class="small">3 trạng thái: <span class="badge high">có</span> <span class="badge med">không chắc</span> <span class="badge low">không có</span></p>
+
+      <h3 style="margin-top: 20px;">Footprint Monitor chạy nền</h3>
+      <p class="small">Alarm 6h–7d. Lưu baseline, diff lần sau. Có account mới mang username target → bắn alert.</p>
+    </div>
+    <div>
+      <h3>Cross-Platform Linkage</h3>
+      <table>
+        <tr><th>Tín hiệu</th><th>Điểm</th></tr>
+        <tr><td>Trùng username</td><td>+50</td></tr>
+        <tr><td>Bio cross-link</td><td>+60</td></tr>
+        <tr><td>Cùng URL external</td><td>+40</td></tr>
+        <tr><td>Cùng CDN path avatar</td><td>+30</td></tr>
+        <tr><td>pHash avatar trùng</td><td>+70</td></tr>
+        <tr><td>pHash avatar gần giống</td><td>+55</td></tr>
+      </table>
+      <p class="small">Tổng điểm ≥30 = có khả năng cùng 1 người. Phân 3 mức tin cậy.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Cross-Profile pHash Diff (nền)</h2>
+  <p>Sau mỗi privacy scan, so pHash avatar của profile vừa scan với toàn bộ profile đã track từ trước.</p>
+  <table>
+    <thead><tr><th>Mức</th><th>Khi nào</th><th>Ý nghĩa</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="badge high">HIGH</span></td>
+        <td>Cùng platform + khác username + pHash ≤10</td>
+        <td>Khả năng cao là account giả mạo</td>
+      </tr>
+      <tr>
+        <td><span class="badge med">MEDIUM</span></td>
+        <td>Khác platform + khác username + pHash giống</td>
+        <td>Có thể cùng kẻ vận hành nhiều persona</td>
+      </tr>
+      <tr>
+        <td><span class="badge low">LOW</span></td>
+        <td>Khác platform + cùng username + pHash giống</td>
+        <td>Đa số là user dùng lại avatar của chính mình</td>
+      </tr>
+    </tbody>
+  </table>
+  <br>
+  <p class="small">Lưu pair-key vào storage để khỏi alert lặp. HIGH thì kèm chrome.notifications popup.</p>
+</section>
+
+<!-- RED TEAM FEATURES -->
+<section>
+  <h2>Phần cho Red Team</h2>
+  <h3>Deep Privacy Scan — 25+ regex</h3>
+  <div class="cols">
+    <div>
+      <table>
+        <tr><th>Pattern</th><th>Match</th></tr>
+        <tr><td>Email</td><td><code>a@b.com</code></td></tr>
+        <tr><td>SĐT VN</td><td><code>09xxxxxxxx</code></td></tr>
+        <tr><td>CCCD/CMND</td><td>12/9 chữ số</td></tr>
+        <tr><td>MSSV (có context)</td><td><code>MSSV: 21520001</code></td></tr>
+        <tr><td>Biển số xe</td><td><code>51A-12345</code></td></tr>
+        <tr><td>MoMo handle</td><td><code>momo: 09xx</code></td></tr>
+      </table>
+    </div>
+    <div>
+      <table>
+        <tr><th>Pattern</th><th>Match</th></tr>
+        <tr><td>Credit card</td><td>Có check Luhn</td></tr>
+        <tr><td>Tag người thân</td><td><code>con: ..., mẹ: ...</code></td></tr>
+        <tr><td>Trường/Cty</td><td><code>học tại UIT</code></td></tr>
+        <tr><td>Địa chỉ chi tiết</td><td>đường + phường + quận</td></tr>
+        <tr><td>Password leak</td><td><code>password: ...</code></td></tr>
+        <tr><td>ZaloPay</td><td><code>zalopay: 09xx</code></td></tr>
+      </table>
+    </div>
+  </div>
+  <p class="small" style="margin-top: 16px;">Quét luôn bio + display name + 12 caption gần nhất. Tool quốc tế đa số chỉ quét bio.</p>
+</section>
+
+<section>
+  <h2>Doxxing Report — mẫu output</h2>
+  <pre><code class="language-text">Target: @target_username (Instagram)
+
+ATTACKER ĐÃ BIẾT (5 datapoint):
+- Tên thật: "Nguyễn Văn A" (từ display name)
+- Nơi làm: "Tech Company X" (bio nói rõ)
+- Email: a.nguyen@techx.com (bio leak)
+- SĐT: 0901234567 (caption Post #3)
+- Khu vực sống: ~Quận 1 HCM (5/12 posts tag location, cluster bán kính 2.3km)
+
+ATTACKER CÓ THỂ LÀM:
+- Spear phishing tới email cá nhân
+- SIM swap với SĐT có sẵn
+- Recon vật lý nhà/cơ quan (geo cluster)
+- Pivot sang LinkedIn để giả đồng nghiệp
+
+ƯỚC LƯỢNG THỜI GIAN để dox được địa chỉ nhà:
+&lt; 4 giờ (geo cluster + Google Maps reverse)</code></pre>
+  <p class="small">Tổng hợp từ 5 nguồn: PII findings, breach data, linkage signals, posts pattern, profile metadata.</p>
+</section>
+
+<section>
+  <h2>Geo Heatmap — pipeline</h2>
+  <ol style="font-size: 0.7em;">
+    <li>Lấy <code>recentPosts</code> từ IG API, đọc trường <code>location.lat/lng</code></li>
+    <li>Nếu API trả rỗng (bị degraded) → scrape DOM tìm <code>&lt;a href="/p/&lt;shortcode&gt;/"&gt;</code>, fetch HTML từng post, regex bóc <code>"location":{"pk":...,"lat":...,"lng":...,"name":"..."}</code></li>
+    <li>Cluster theo lat/lng làm tròn 4 chữ số</li>
+    <li>Mercator projection lat/lng → pixel canvas</li>
+    <li>Vẽ radial-gradient với <code>globalCompositeOperation='lighter'</code> để các blob chồng nhau cộng cường độ</li>
+    <li>Color ramp HSL <code>hue = 60 - intensity*60</code> (vàng → đỏ)</li>
+    <li>Haversine tính khoảng cách lớn nhất giữa các điểm; nếu &lt;30km thì cảnh báo "nơi sống/làm việc thường xuyên"</li>
+  </ol>
+  <p class="small">Không cần Leaflet. Geocoding qua OSM Nominatim (cache vĩnh viễn, rate-limit 1.1s/request).</p>
+</section>
+
+<section>
+  <h2>VietQR Decoder</h2>
+  <div class="cols">
+    <div>
+      <p class="small">Use case red team: ảnh public có QR thanh toán → biết bank/STK → social engineering tiếp.</p>
+      <p class="small"><b>Cách làm:</b></p>
+      <ol class="small">
+        <li>jsQR (bundle local 130KB) decode ảnh</li>
+        <li>Parse EMV TLV chuẩn VietQR</li>
+        <li>Tag 38 → sub-tag 01 → bank BIN + số tài khoản</li>
+        <li>Bonus: tag 54 (số tiền), 59 (tên), 60 (thành phố)</li>
+      </ol>
+    </div>
+    <div>
+      <pre><code class="language-text">Decoded VietQR:
+  Bank BIN: 970436 (Vietcombank)
+  Account:  0123456789
+  Merchant: Nguyen Van A
+  City:     Ho Chi Minh
+  Amount:   500,000 VND</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- END USER FEATURES -->
+<section>
+  <h2>Phần cho người dùng phổ thông</h2>
+  <div class="cols">
+    <div>
+      <h3>Nút FAB 1-click</h3>
+      <p class="small">Nút tròn góc dưới phải khi vào IG/X. Bấm vào ra menu 7 action: Capture, Privacy Scan, Link Scan, Engagement, Impersonation, Audit Settings, Parse Apps.</p>
+
+      <h3 style="margin-top: 16px;">Privacy Settings Auditor</h3>
+      <p class="small">Mở trang Settings IG/X → bấm Audit → đọc DOM để chấm điểm: private toggle, 2FA, số session, OAuth apps, tag policy, findable by email/phone.</p>
+    </div>
+    <div>
+      <h3>Safe Image Generator</h3>
+      <ol class="small">
+        <li>Re-encode JPEG qua Canvas → mất sạch EXIF</li>
+        <li>Detect QR qua jsQR → vẽ rect đen che + stamp "[QR removed]"</li>
+        <li>Optional: auto-blur vùng có text (Sobel edge density + connected components → pixelate)</li>
+        <li>Nếu nhận diện như CCCD (aspect 1.585) → chỉ cảnh báo, không tự crop, để user tự quyết</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Output cho người dùng phổ thông</h2>
+  <pre><code class="language-text">Privacy Score: 42/100 — MEDIUM
+
+Phát hiện:
+🟠 Email lộ trong bio (a.nguyen@gmail.com)
+🟠 SĐT lộ trong caption Post #3
+🟡 Profile public + 5 posts tag location
+🟢 2FA đã bật
+🟢 Không có password trong bio
+
+Khuyến nghị:
+1. Bỏ email khỏi bio, thay bằng Linktree
+2. Sửa caption Post #3 bỏ SĐT
+3. Cân nhắc set private nếu không phải brand
+4. Tắt tag location cho posts cá nhân</code></pre>
+</section>
+
+<!-- THREAT MODEL -->
+<section>
+  <h2>Threat model</h2>
+  <table>
+    <thead><tr><th>Đối tượng</th><th>Tấn công thế nào</th><th>Tool chặn ra sao</th></tr></thead>
+    <tbody>
+      <tr><td>Phishing scammer</td><td>DM/comment chèn link độc</td><td>Link Scanner: GSB + VT + URLhaus</td></tr>
+      <tr><td>Stalker</td><td>OSINT location tag + bio</td><td>Privacy Scan + Geo Heatmap cảnh báo</td></tr>
+      <tr><td>Impersonator</td><td>Clone avatar, DM follower</td><td>Cross-Profile pHash Diff bắn alert HIGH</td></tr>
+      <tr><td>Identity thief</td><td>Password leak → SIM swap</td><td>HIBP password check + email breach lookup</td></tr>
+      <tr><td>Doxxer</td><td>Cross-platform username enum</td><td>Tự enum trước để biết mình lộ ở đâu</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Privacy posture — dữ liệu đi đâu?</h2>
+  <table>
+    <thead><tr><th>Loại data</th><th>Lưu ở đâu</th><th>Có gửi đi không</th></tr></thead>
+    <tbody>
+      <tr><td>Snapshots follower/following</td><td>chrome.storage.local</td><td><b>Không</b></td></tr>
+      <tr><td>Privacy scan results</td><td>chrome.storage.local</td><td><b>Không</b></td></tr>
+      <tr><td>pHash avatar</td><td>chrome.storage.local</td><td><b>Không</b></td></tr>
+      <tr><td>EXIF ảnh local</td><td>RAM only</td><td><b>Không upload ảnh</b></td></tr>
+      <tr><td>Password check (HIBP)</td><td>SHA-1 local → cắt 5 ký tự đầu</td><td>Chỉ 5 ký tự hash (k-anonymity)</td></tr>
+      <tr><td>URL check</td><td>RAM → GSB/VT/URLhaus</td><td>Có gửi URL (cần để check)</td></tr>
+      <tr><td>AI text analysis</td><td>Text → localhost:3456</td><td>Chỉ nếu user setup server</td></tr>
+    </tbody>
+  </table>
+  <p class="small" style="margin-top: 12px;">Không có server trung gian của extension, không telemetry. Manifest cũng không xin <code>&lt;all_urls&gt;</code> hay <code>tabs</code>.</p>
+</section>
+
+<!-- THREAT INTEL APIS -->
+<section>
+  <h2>6 API miễn phí</h2>
+  <table>
+    <thead><tr><th>API</th><th>Auth</th><th>Quota</th><th>Dùng để</th></tr></thead>
+    <tbody>
+      <tr><td>Google Safe Browsing v4</td><td>API key</td><td>10k/ngày</td><td>URL phishing/malware</td></tr>
+      <tr><td>VirusTotal v3</td><td>API key</td><td>500/ngày</td><td>URL với 70+ engine</td></tr>
+      <tr><td>URLhaus (abuse.ch)</td><td>Không</td><td>Fair use</td><td>Feed malware URL</td></tr>
+      <tr><td>HIBP Pwned Passwords</td><td>Không</td><td>Unlimited</td><td>Password breach k-anon</td></tr>
+      <tr><td>XposedOrNot</td><td>Không</td><td>100/giờ</td><td>Email breach</td></tr>
+      <tr><td>HackCheck</td><td>Không</td><td>Fair use</td><td>Email breach dự phòng</td></tr>
+    </tbody>
+  </table>
+  <br>
+  <p class="small">Fallback chain: API 1 fail thì sang API 2, sang nữa, cuối cùng dùng heuristic local. Không bao giờ chết feature vì 1 API down.</p>
+</section>
+
+<!-- PHASH DEEP DIVE -->
+<section>
+  <h2>pHash — chi tiết thuật toán</h2>
+  <div class="cols">
+    <div>
+      <pre><code class="language-text">Ảnh input
+  ↓
+Canvas 32×32 grayscale
+  ↓
+2D DCT-II (chỉ giữ 8×8 low-freq)
+  · cosine table cache lại
+  · row-wise → 32×8
+  · column-wise → 8×8
+  ↓
+Bỏ DC component [0,0]
+  ↓
+Tính median của 63 còn lại
+  ↓
+Bitstring 64 bit:
+  vi > median ? '1' : '0'</code></pre>
+    </div>
+    <div>
+      <p class="small"><b>Tại sao chọn pHash DCT, không phải aHash?</b></p>
+      <ul class="small">
+        <li>Chịu được xoay nhẹ &lt;5°, crop &lt;10%</li>
+        <li>Không bị ảnh hưởng bởi brightness/color shift</li>
+        <li>Threshold chặt hơn: ≤2 identical, ≤10 similar (aHash phải ≤8 mới chắc)</li>
+      </ul>
+      <p class="small"><b>Tối ưu thực tế:</b></p>
+      <ul class="small">
+        <li>Chỉ tính 8 row/col đầu thay vì full 32×32 → giảm 75% workload</li>
+        <li>Cosine table cache giữa các lần gọi</li>
+        <li>Tổng thời gian ~80ms / ảnh</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- PERFORMANCE -->
+<section>
+  <h2>Quy mô codebase</h2>
+  <div class="kpi">
+    <div><div class="num">~12k</div><div class="label">dòng JS</div></div>
+    <div><div class="num">~250KB</div><div class="label">size unpacked</div></div>
+    <div><div class="num">11</div><div class="label">lib modules</div></div>
+    <div><div class="num">10</div><div class="label">dashboard pages</div></div>
+  </div>
+  <br>
+  <div class="kpi">
+    <div><div class="num">6</div><div class="label">threat intel API</div></div>
+    <div><div class="num">15</div><div class="label">footprint sites</div></div>
+    <div><div class="num">25+</div><div class="label">regex pattern</div></div>
+    <div><div class="num">27</div><div class="label">host_permissions</div></div>
+  </div>
+  <br>
+  <p class="small">Phần benchmark precision/recall của regex + thời gian scan chưa có dataset chuẩn để đo. Đã verify manual với các profile thực tế (mình, người quen, một số public account) thấy regex hoạt động đúng kỳ vọng, nhưng chưa thể đưa số liệu chính thức trong phạm vi đồ án.</p>
+</section>
+
+<!-- FIREFOX PORT -->
+<section>
+  <h2>Port sang Firefox?</h2>
+  <div class="cols">
+    <div>
+      <h3>Khả thi</h3>
+      <p class="small">Firefox hỗ trợ MV3 từ v109 (1/2023). Khoảng 80% code dùng lại được.</p>
+
+      <h3 style="margin-top: 16px;">6 điểm cần sửa</h3>
+      <ol class="small">
+        <li><code>chrome.*</code> → <code>browser.*</code>, thêm polyfill 30KB</li>
+        <li>Service worker → Event page (lifecycle khác)</li>
+        <li><code>importScripts</code> không chạy trong event page</li>
+        <li>Manifest cần <code>browser_specific_settings.gecko.id</code></li>
+        <li>Notification phải dùng absolute URL cho icon</li>
+        <li>Phải sign qua AMO mới install permanent được</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Ước lượng công sức</h3>
+      <table>
+        <tr><td>Polyfill + bundler</td><td>2-4h</td></tr>
+        <tr><td>Sửa importScripts</td><td>4-6h</td></tr>
+        <tr><td>Sửa manifest</td><td>0.5h</td></tr>
+        <tr><td>Test 10 main flow</td><td>4-8h</td></tr>
+        <tr><td>Fix bug Firefox-specific</td><td>4-12h</td></tr>
+        <tr><td>Setup AMO sign pipeline</td><td>2-4h</td></tr>
+        <tr><th>Tổng</th><th>16-35h</th></tr>
+      </table>
+      <p class="small" style="margin-top: 8px;">Khoảng 2-4 ngày làm việc. CI build 2 artifact: <code>chrome.zip</code> + <code>firefox.xpi</code>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP -->
+<section>
+  <h2>Việc còn lại</h2>
+  <div class="cols-3">
+    <div class="card low">
+      <h3>Ngắn hạn</h3>
+      <ul class="small">
+        <li>OCR thật sự work trong MV3 (OffscreenCanvas + WASM)</li>
+        <li>Heatmap pan/zoom + click ra Maps</li>
+        <li>Text-region detect bằng MSER/CRNN</li>
+        <li>Parser GitHub apps page</li>
+        <li>Alert khi số apps tăng đột biến</li>
+      </ul>
+    </div>
+    <div class="card warn">
+      <h3>Trung hạn</h3>
+      <ul class="small">
+        <li>Hỗ trợ Facebook, TikTok, Threads</li>
+        <li>Regex cho ngôn ngữ khác (KR/JP/CN)</li>
+        <li>Port Firefox</li>
+        <li>Edge (Chromium → gần như xong)</li>
+        <li>Export backup mã hóa local</li>
+      </ul>
+    </div>
+    <div class="card danger">
+      <h3>Dài hạn</h3>
+      <ul class="small">
+        <li>Tích hợp threat intel feed VNCERT</li>
+        <li>ML thay rule-based scam patterns</li>
+        <li>Federated pHash sharing (opt-in)</li>
+        <li>Port sang Tampermonkey cho user không cài extension được</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- DEMO -->
+<section>
+  <h2>Demo trực tiếp</h2>
+  <ol style="font-size: 0.7em;">
+    <li>FAB Privacy Scan trên 1 profile IG → notification + xem kết quả ở dashboard</li>
+    <li>Footprint Enum: nhập username "torvalds" → list 15 site</li>
+    <li>Mở 1 Doxxing Report đã sinh → đọc narrative</li>
+    <li>Upload ảnh có EXIF GPS → tool bóc tọa độ + tạo bản safe</li>
+    <li>Upload ảnh VietQR → decode ra STK + bank</li>
+    <li>Load 1 IG account có nhiều tag location → render heatmap canvas</li>
+    <li>Cross-Profile pHash Diff: scan now → list account giống nhau</li>
+    <li>Mở IG settings page → bấm Audit → xem score + recommendations</li>
+  </ol>
+</section>
+
+<!-- KẾT LUẬN -->
+<section>
+  <h2>Kết luận</h2>
+  <div class="cols">
+    <div>
+      <div class="card">
+        <b>1 codebase phục vụ 3 nhóm</b><br>
+        <span class="small">Threat intel, red team, người dùng phổ thông — qua UI khác nhau (FAB inline, Tools page chuyên dụng, background monitor)</span>
+      </div>
+      <br>
+      <div class="card">
+        <b>VN-specific value</b><br>
+        <span class="small">7 regex không có ở tool quốc tế (CCCD, MSSV, biển số, MoMo, ZaloPay, family member, địa chỉ phường/quận) + VietQR EMV decoder + UI tiếng Việt</span>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <b>Tôn trọng riêng tư</b><br>
+        <span class="small">Không server trung gian, password check k-anonymity, AI server tùy chọn chạy localhost, permission tối thiểu</span>
+      </div>
+      <br>
+      <div class="card warn">
+        <b>Bài học làm extension MXH</b><br>
+        <span class="small">Là cuộc chạy đua với platform anti-scraping. Cần 3 lớp fallback (API → DOM → HTML regex), không cache eager, document workaround khi adblock chặn.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- THANK YOU -->
+<section class="title-slide">
+  <div class="shield-icon">🛡️</div>
+  <h1 style="color: var(--accent);">Cảm ơn</h1>
+  <div class="sub">Q & A</div>
+  <div class="meta" style="margin-top: 60px;">
+    SocialShield v1.1<br>
+    Repo: <code>NT208.Q21.ANTN</code><br>
+    NT208.Q21.ANTN · UIT · 2026
+  </div>
+</section>
+
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/plugin/highlight/highlight.js"></script>
+<script>
+Reveal.initialize({
+  hash: true,
+  slideNumber: 'c/t',
+  controls: true,
+  progress: true,
+  history: true,
+  transition: 'slide',
+  width: 1400,
+  height: 900,
+  margin: 0.04,
+  plugins: [RevealHighlight]
+});
+</script>
+</body>
+</html>
