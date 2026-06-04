@@ -185,6 +185,18 @@ const InstagramAPI = {
     }
   },
 
+  decodeShortcodeToMediaId(shortcode) {
+    if (!shortcode || !/^[A-Za-z0-9_-]+$/.test(shortcode)) return null;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let id = 0n;
+    for (const ch of shortcode) {
+      const value = alphabet.indexOf(ch);
+      if (value < 0) return null;
+      id = id * 64n + BigInt(value);
+    }
+    return id.toString();
+  },
+
   /**
    * Fetch chi tiết 1 post qua shortcode. Dùng cho DOM-scrape fallback khi
    * web_profile_info trả 0 edges. Endpoint: post page chứa __NEXT_DATA__ /
@@ -192,13 +204,13 @@ const InstagramAPI = {
    */
   async fetchPostDetail(shortcode) {
     if (!shortcode) return null;
-    // Cache key version v2: bump để invalidate cache trước khi parser biết về
-    // location.lat/lng. Cache cũ chứa { location: null } sẽ bị bỏ qua.
-    const cacheKey = `_cache_ig_post_v2_${shortcode}`;
+    // Cache key version v3: cache cả caption lẫn location; v2 chỉ cache khi có
+    // location nên caption sau khi edit có thể bị miss khi scan ngầm.
+    const cacheKey = `_cache_ig_post_v3_${shortcode}`;
     const TTL = 60 * 60 * 1000; // 1 giờ
     const cached = await SocialShieldStorage.cacheGet(cacheKey, TTL);
     if (cached) {
-      console.log(`[SocialShield BG] cache hit ${shortcode}: location=${cached.location || '∅'} lat=${cached.lat ?? '∅'}`);
+      console.log(`[SocialShield BG] cache hit ${shortcode}: caption=${cached.caption ? 'yes' : '∅'} location=${cached.location || '∅'} lat=${cached.lat ?? '∅'}`);
       return cached;
     }
     console.log(`[SocialShield BG] fetchPostDetail ${shortcode} — fetching fresh`);
@@ -206,19 +218,33 @@ const InstagramAPI = {
     try {
       const csrfToken = await this.getCsrfToken();
       const cookieHeader = await this.buildCookieHeader();
-      const res = await fetch(
-        `https://www.instagram.com/api/v1/media/${shortcode}/info/`,
-        { headers: this._igHeaders(csrfToken, cookieHeader) }
-      );
-      // Nếu media-info endpoint fail, fallback sang scrape post page HTML
-      if (!res.ok) {
-        console.warn(`[SocialShield BG] media/${shortcode}/info/ HTTP ${res.status} → falling back to HTML scrape`);
-        return await this._scrapePostPageHtml(shortcode, csrfToken, cookieHeader);
+
+      const mediaId = this.decodeShortcodeToMediaId(shortcode);
+      const identifiers = [...new Set([shortcode, mediaId].filter(Boolean))];
+      let item = null;
+      let usedIdentifier = null;
+
+      for (const id of identifiers) {
+        const res = await fetch(
+          `https://www.instagram.com/api/v1/media/${id}/info/`,
+          { headers: this._igHeaders(csrfToken, cookieHeader) }
+        );
+        if (!res.ok) {
+          console.warn(`[SocialShield BG] media/${id}/info/ HTTP ${res.status}`);
+          continue;
+        }
+
+        const data = await res.json();
+        item = data?.items?.[0] || null;
+        if (item) {
+          usedIdentifier = id;
+          break;
+        }
+        console.warn(`[SocialShield BG] media/${id}/info/ returned ok but items empty`);
       }
-      const data = await res.json();
-      const item = data?.items?.[0];
+
       if (!item) {
-        console.warn(`[SocialShield BG] media/${shortcode}/info/ returned ok but items empty → HTML scrape fallback`);
+        console.warn(`[SocialShield BG] media-info failed for ${shortcode} (${mediaId || 'no media_id'}) → HTML scrape fallback`);
         return await this._scrapePostPageHtml(shortcode, csrfToken, cookieHeader);
       }
 
@@ -231,6 +257,7 @@ const InstagramAPI = {
         this._loggedLocationShape = true;
         console.log('[SocialShield BG] Sample post location shape:', shortcode,
           JSON.stringify({
+            mediaId: usedIdentifier,
             location: item.location,
             lat: item.lat,
             lng: item.lng,
@@ -259,7 +286,7 @@ const InstagramAPI = {
         comments: item.comment_count || 0,
         isVideo: !!item.video_versions,
         takenAt: item.taken_at ? new Date(item.taken_at * 1000).toISOString() : null,
-        _source: locationName || locationLat != null ? 'media_info_api' : 'media_info_api_empty',
+        _source: `media_info_api:${usedIdentifier === mediaId ? 'media_id' : 'shortcode'}`,
       };
 
       // Nếu API trả nhưng không có location data, thử HTML scrape — có thể tìm
@@ -277,7 +304,7 @@ const InstagramAPI = {
       }
 
       // Chỉ cache nếu có data hữu ích, tránh cache rỗng dài hạn
-      if (out.location || out.lat != null) {
+      if (out.caption || out.location || out.lat != null) {
         await SocialShieldStorage.cacheSet(cacheKey, out);
       }
       return out;
