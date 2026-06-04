@@ -184,6 +184,37 @@
     // ==================== Generic Scans (any site) ====================
 
     /**
+     * Suy ra platform + username để lưu privacy scan cho page BẤT KỲ.
+     * platform = slug từ hostname (map các MXH phổ biến), username = handle suy từ path.
+     * Privacy scan áp dụng mọi nền tảng nên cần key ổn định để lưu/đối chiếu.
+     */
+    _platformInfoFromUrl(rawUrl) {
+      try {
+        const u = new URL(rawUrl);
+        const host = u.hostname.replace(/^(www|m|web|mobile)\./, '');
+        const known = {
+          'tiktok.com': 'tiktok', 'facebook.com': 'facebook', 'fb.com': 'facebook',
+          'linkedin.com': 'linkedin', 'threads.net': 'threads', 'threads.com': 'threads',
+          'youtube.com': 'youtube', 'reddit.com': 'reddit', 'github.com': 'github',
+          'pinterest.com': 'pinterest', 'tumblr.com': 'tumblr', 'snapchat.com': 'snapchat',
+          't.me': 'telegram', 'telegram.org': 'telegram', 'mastodon.social': 'mastodon',
+        };
+        const platform = known[host] || host;
+        const path = u.pathname || '/';
+        let username =
+          (path.match(/\/@([A-Za-z0-9._-]+)/) || [])[1] ||                          // @handle (tiktok/threads/yt)
+          (path.match(/\/in\/([A-Za-z0-9._-]+)/) || [])[1] ||                       // linkedin /in/<user>
+          (path.match(/\/(?:user|u|users|profile)\/([A-Za-z0-9._-]+)/) || [])[1] || // reddit/forums
+          u.searchParams.get('id') ||                                               // facebook profile.php?id=
+          (path.split('/').filter(Boolean)[0] || '');                              // first path segment
+        if (!username || !/^[A-Za-z0-9._-]{1,40}$/.test(username)) username = 'page';
+        return { platform, username };
+      } catch {
+        return { platform: 'web', username: 'page' };
+      }
+    },
+
+    /**
      * Privacy scan trên page bất kỳ:
      * dùng chrome.scripting.executeScript để bóc text từ active tab,
      * rồi chạy SocialShieldScanner.scanPrivacy ngay trong popup.
@@ -209,12 +240,32 @@
           ...SocialShieldScanner.checkPasswordExposure(pageText),
         ];
 
+        // Privacy scan áp dụng cho MỌI nền tảng → luôn lưu privacy scan + doxxing report (như IG/X).
+        let savedNote = '';
+        try {
+          const { platform, username } = this._platformInfoFromUrl(this.currentTab?.url || '');
+          await SocialShieldStorage.savePrivacyScan(platform, username, findings);
+
+          // Mỗi privacy scan kèm 1 doxxing report (attacker-view) — đồng nhất với IG/X.
+          const doxxing = SocialShieldScanner.generateDoxxingReport({
+            profile: { username },
+            privacyFindings: findings,
+          });
+          await SocialShieldStorage.set(`doxxing_${platform}_${username}`, {
+            ...doxxing, username, platform,
+          });
+
+          savedNote = `<div style="font-size:10px; color:#9ca3af; margin-top:6px;">💾 Saved privacy scan + doxxing report as <b>${this.escapeHtml(platform)}/@${this.escapeHtml(username)}</b> (risk ${doxxing.riskScore}/100) — Dashboard › Privacy Scans / Doxxing Risk</div>`;
+        } catch (e) {
+          console.error('[SocialShield] generic privacy/doxxing save failed:', e);
+        }
+
         if (findings.length === 0) {
-          out.innerHTML = '<div style="color:#00d4aa; font-weight:600;">✓ No PII detected on this page.</div>';
+          out.innerHTML = '<div style="color:#00d4aa; font-weight:600;">✓ No PII detected on this page.</div>' + savedNote;
           return;
         }
 
-        let html = `<div style="font-weight:600; margin-bottom:8px;">Found ${findings.length} issue(s) on this page:</div>`;
+        let html = savedNote + `<div style="font-weight:600; margin-bottom:8px;">Found ${findings.length} issue(s) on this page:</div>`;
         for (const f of findings) {
           const sevColor = f.severity === 'critical' ? '#ef4444'
                         : f.severity === 'high' ? '#f97316'
