@@ -1231,10 +1231,29 @@
             return;
           }
           let html = `<div style="margin-bottom: 12px; font-weight: 600; color: var(--accent);">${result.summary}</div>`;
+
+          // Correlated identity từ intel các site → composite profile từ 1 username
+          const ci = result.correlatedIntel || {};
+          const ciRows = [];
+          if (ci.realNames?.length) ciRows.push(['Real name(s)', ci.realNames.join(' / ')]);
+          if (ci.emails?.length) ciRows.push(['Email(s)', ci.emails.join(', ')]);
+          if (ci.locations?.length) ciRows.push(['Location(s)', ci.locations.join(' / ')]);
+          if (ci.linkedAccounts?.length) ciRows.push(['Linked accounts', ci.linkedAccounts.join(', ')]);
+          if (ciRows.length) {
+            html += '<div style="margin-bottom:12px;padding:10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;">';
+            html += '<div style="font-weight:600;margin-bottom:6px;">🧩 Correlated identity (ghép từ các site tìm thấy)</div>';
+            for (const [k, v] of ciRows) html += `<div style="font-size:13px;margin-bottom:2px;"><b>${k}:</b> ${this._escapeHtml(v)}</div>`;
+            html += '</div>';
+          }
+
           html += '<table style="width:100%; border-collapse: collapse;">';
           html += '<thead><tr style="border-bottom: 1px solid var(--border);"><th style="text-align:left;padding:6px;">Site</th><th style="text-align:left;padding:6px;">Status</th><th style="text-align:left;padding:6px;">Profile</th></tr></thead><tbody>';
           for (const r of result.found) {
             html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: var(--danger);">✓ Found</td><td style="padding:6px;"><a href="${r.profileUrl}" target="_blank" style="color: var(--accent);">${r.profileUrl}</a></td></tr>`;
+            if (r.intel) {
+              const bits = Object.entries(r.intel).map(([k, v]) => `${k}: ${this._escapeHtml(String(v))}`).join(' · ');
+              html += `<tr><td style="padding:0 6px;"></td><td colspan="2" style="padding:0 6px 8px; font-size:11px; color: var(--text-secondary);">↳ ${bits}</td></tr>`;
+            }
           }
           for (const r of result.notFound) {
             html += `<tr><td style="padding:6px;">${r.site}</td><td style="padding:6px; color: var(--text-secondary);">✗ Not found</td><td style="padding:6px;">—</td></tr>`;
@@ -1988,6 +2007,7 @@
       let html = `<div style="display:flex; align-items: baseline; gap: 16px; margin-bottom: 16px;">`;
       html += `<div style="font-size: 48px; font-weight: 700; color: ${tierColor};">${r.riskScore}<span style="font-size: 20px;">/100</span></div>`;
       html += `<div><div style="font-size: 14px; text-transform: uppercase; color: ${tierColor}; font-weight: 600;">${r.riskTier} risk</div><div style="font-size: 12px; color: var(--text-secondary);">Generated ${new Date(r.generatedAt).toLocaleString()}</div></div>`;
+      html += `<button id="btn-doxxing-export" style="margin-left:auto;align-self:center;padding:6px 12px;background:var(--accent);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:600;">⬇ Export .md</button>`;
       html += `</div>`;
 
       html += `<div style="padding: 14px; background: rgba(255,255,255,0.04); border-left: 3px solid ${tierColor}; border-radius: 4px; margin-bottom: 16px; line-height: 1.6;">${this._escapeHtml(r.narrative).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</div>`;
@@ -2002,12 +2022,47 @@
         html += '</ul>';
       }
 
+      // Attack chains (multi-step playbooks)
+      if (r.attackChains?.length > 0) {
+        html += '<h3 style="margin: 16px 0 8px;">🔗 Chuỗi tấn công (playbook):</h3>';
+        for (const c of r.attackChains) {
+          const sevColor = c.severity === 'critical' ? 'var(--danger)'
+                        : c.severity === 'high' ? 'orange'
+                        : c.severity === 'medium' ? '#fbbf24' : 'var(--accent)';
+          html += `<div style="margin-bottom:10px;padding:10px;background:rgba(255,255,255,0.04);border-left:3px solid ${sevColor};border-radius:4px;">`;
+          html += `<div style="font-weight:600;">${this._escapeHtml(c.name)} <span style="font-size:11px;color:${sevColor};text-transform:uppercase;">[${c.severity}]</span></div>`;
+          if (c.why) html += `<div style="font-size:12px;color:var(--text-secondary);margin:2px 0 6px;">${this._escapeHtml(c.why)}</div>`;
+          html += '<ol style="margin:0;padding-left:18px;font-size:13px;">';
+          for (const s of c.steps) html += `<li style="margin-bottom:2px;">${this._escapeHtml(s)}</li>`;
+          html += '</ol></div>';
+        }
+      }
+
       // Attacker can do
       if (r.attackerCanDo?.length > 0) {
         html += '<h3 style="margin: 16px 0 8px;">⚔️ Hướng tấn công khả thi:</h3>';
         html += '<ul style="margin: 0; padding-left: 20px;">';
         for (const a of r.attackerCanDo) {
           html += `<li style="margin-bottom: 4px; color: var(--text);">${this._escapeHtml(a)}</li>`;
+        }
+        html += '</ul>';
+      }
+
+      // Next recon pivots (OSINT tools/commands to run next)
+      if (r.nextRecon?.length > 0) {
+        html += '<h3 style="margin: 16px 0 8px;">🔎 Bước recon kế tiếp (pivot):</h3>';
+        html += '<ul style="margin:0;padding-left:20px;">';
+        for (const n of r.nextRecon) {
+          let li = `<b>${this._escapeHtml(n.tool)}</b> — ${this._escapeHtml(n.why)}`;
+          if (n.command) li += `<br><code style="font-size:12px;background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">${this._escapeHtml(n.command)}</code>`;
+          if (n.url) li += `<br><a href="${n.url}" target="_blank" style="color:var(--accent);font-size:12px;">${this._escapeHtml(n.url)}</a>`;
+          if (n.note) li += `<br><span style="font-size:11px;color:var(--text-secondary);">${this._escapeHtml(n.note)}</span>`;
+          if (n.dorks) {
+            li += '<ul style="margin:2px 0;padding-left:16px;">';
+            for (const d of n.dorks) li += `<li style="font-size:11px;color:var(--text-secondary);"><code>${this._escapeHtml(d.query)}</code></li>`;
+            li += '</ul>';
+          }
+          html += `<li style="margin-bottom:6px;">${li}</li>`;
         }
         html += '</ul>';
       }
@@ -2025,7 +2080,28 @@
 
       body.innerHTML = html;
       card.style.display = 'block';
+
+      const exportBtn = document.getElementById('btn-doxxing-export');
+      if (exportBtn) exportBtn.addEventListener('click', () => this._exportDoxxing(r));
+
       card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+
+    /** Export doxxing report ra Markdown: download + copy clipboard */
+    _exportDoxxing(r) {
+      const md = SocialShieldScanner.exportDoxxingReportMarkdown(r);
+      try {
+        const blob = new Blob([md], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `doxxing_${r.platform || 'report'}_${r.username || 'target'}.md`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('[SocialShield] export failed:', err);
+      }
+      if (navigator.clipboard) navigator.clipboard.writeText(md).catch(() => {});
     },
 
     // ==================== Event Binding ====================

@@ -1407,6 +1407,54 @@ const SocialShieldScanner = {
   ],
 
   /**
+   * Trích intel từ JSON đã fetch (vốn bị vứt đi) → biến footprint từ yes/no thành recon thật.
+   * Mỗi extractor trả object phẳng; _cleanIntel sẽ loại field rỗng.
+   */
+  FOOTPRINT_EXTRACTORS: {
+    'GitHub': d => ({ name: d.name, bio: d.bio, company: d.company, location: d.location,
+      blog: d.blog, email: d.email, twitter: d.twitter_username, repos: d.public_repos,
+      followers: d.followers, since: (d.created_at || '').slice(0, 10) }),
+    'GitLab': d => { const u = Array.isArray(d) ? d[0] : null; return u && { name: u.name,
+      location: u.location, bio: u.bio || u.description, since: (u.created_at || '').slice(0, 10) }; },
+    'Codeberg': d => ({ name: d.full_name, location: d.location, bio: d.description,
+      website: d.website, since: (d.created || '').slice(0, 10) }),
+    'DEV.to': d => ({ name: d.name, location: d.location, bio: d.summary,
+      github: d.github_username, twitter: d.twitter_username, since: d.joined_at }),
+    'Docker Hub': d => ({ name: d.full_name, location: d.location, company: d.company,
+      since: (d.date_joined || '').slice(0, 10) }),
+    'Reddit': d => { const u = d && d.data; return u && { karma: u.total_karma,
+      since: u.created_utc ? new Date(u.created_utc * 1000).toISOString().slice(0, 10) : '',
+      verifiedEmail: u.has_verified_email ? 'yes' : '' }; },
+    'Hacker News': d => ({ karma: d.karma,
+      since: d.created ? new Date(d.created * 1000).toISOString().slice(0, 10) : '',
+      about: (d.about || '').replace(/<[^>]+>/g, '') }),
+    'Keybase': d => { const u = d && d.them && d.them[0]; if (!u) return null;
+      const proofs = ((u.proofs_summary && u.proofs_summary.all) || []).map(p => `${p.proof_type}:${p.nametag}`);
+      return { name: u.profile && u.profile.full_name, location: u.profile && u.profile.location,
+        bio: u.profile && u.profile.bio, linked: proofs }; },
+    'Mastodon': d => ({ name: d.display_name, bio: (d.note || '').replace(/<[^>]+>/g, ''),
+      since: (d.created_at || '').slice(0, 10), followers: d.followers_count }),
+    'Lichess': d => ({ since: d.createdAt ? new Date(d.createdAt).toISOString().slice(0, 10) : '',
+      country: d.profile && d.profile.country, bio: d.profile && d.profile.bio,
+      games: d.count && d.count.all }),
+    'Chess.com': d => ({ name: d.name, country: (d.country || '').split('/').pop(),
+      since: d.joined ? new Date(d.joined * 1000).toISOString().slice(0, 10) : '',
+      followers: d.followers }),
+  },
+
+  /** Loại field rỗng/0, cắt chuỗi dài, join array → object intel gọn cho UI */
+  _cleanIntel(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === null || v === undefined || v === '' || v === 0) continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      out[k] = (Array.isArray(v) ? v.join(', ') : String(v)).slice(0, 140);
+    }
+    return Object.keys(out).length ? out : null;
+  },
+
+  /**
    * Quét username trên các site lớn xem account có tồn tại không.
    * Chạy song song, timeout 6s mỗi request.
    * @param {string} username
@@ -1446,10 +1494,15 @@ const SocialShieldScanner = {
           parsed = await res.json().catch(() => null);
         }
         const exists = site.existIf(parsed);
+        let intel = null;
+        if (exists && !isText && this.FOOTPRINT_EXTRACTORS[site.name]) {
+          try { intel = this._cleanIntel(this.FOOTPRINT_EXTRACTORS[site.name](parsed)); } catch {}
+        }
         return {
           site: site.name,
           exists: !!exists,
           profileUrl: exists ? site.profile(cleanUser) : null,
+          intel,
         };
       } catch (err) {
         clearTimeout(timer);
@@ -1464,6 +1517,25 @@ const SocialShieldScanner = {
     const inconclusive = results.filter(r => r.inconclusive);
     const errors = results.filter(r => r.error);
 
+    // Correlate intel across sites → composite identity từ 1 username
+    const names = new Set(), locations = new Set(), emails = new Set(),
+          linked = new Set(), bios = [];
+    for (const r of found) {
+      const it = r.intel; if (!it) continue;
+      if (it.name) names.add(it.name);
+      if (it.location) locations.add(it.location);
+      if (it.email) emails.add(it.email);
+      if (it.country) locations.add(it.country);
+      if (it.twitter) linked.add('twitter:' + it.twitter);
+      if (it.github) linked.add('github:' + it.github);
+      if (it.linked) String(it.linked).split(', ').forEach(x => x && linked.add(x));
+      if (it.bio) bios.push(`${r.site}: ${it.bio}`);
+    }
+    const correlatedIntel = {
+      realNames: [...names], locations: [...locations], emails: [...emails],
+      linkedAccounts: [...linked], bios,
+    };
+
     return {
       username: cleanUser,
       total: this.FOOTPRINT_SITES.length,
@@ -1471,6 +1543,7 @@ const SocialShieldScanner = {
       notFound,
       inconclusive,
       errors,
+      correlatedIntel,
       summary: `Found on ${found.length}/${this.FOOTPRINT_SITES.length} sites` +
                (inconclusive.length ? ` (${inconclusive.length} inconclusive)` : ''),
     };
@@ -1612,6 +1685,209 @@ const SocialShieldScanner = {
       score: Math.min(totalScore, 100),
       signals: pairs.flatMap(p => p.signals),
     };
+  },
+
+  // ==================== OSINT Recon Helpers ====================
+
+  /**
+   * Sinh Google dork sẵn-dán từ các pivot đã có (name/email/phone/username).
+   * @returns {Array<{why, query}>}
+   */
+  generateOSINTDorks(subject = {}) {
+    const { name, email, phone, username, org } = subject;
+    const q = s => `"${s}"`;
+    const dorks = [];
+    if (name) {
+      dorks.push({ why: 'LinkedIn / hồ sơ nghề nghiệp', query: `${q(name)} site:linkedin.com` });
+      dorks.push({ why: 'CV / resume rò rỉ', query: `${q(name)} (CV OR resume OR "sơ yếu lý lịch") filetype:pdf` });
+      dorks.push({ why: 'Mention trên social VN', query: `${q(name)} (facebook.com OR tiktok.com OR instagram.com)` });
+    }
+    if (email) {
+      dorks.push({ why: 'Email bất kỳ nơi nào index', query: q(email) });
+      dorks.push({ why: 'Email trong paste/leak site', query: `${q(email)} (site:pastebin.com OR site:ghostbin.com OR site:throwbin.io)` });
+    }
+    if (phone) {
+      dorks.push({ why: 'Số ĐT bất kỳ nơi nào', query: q(phone) });
+      dorks.push({ why: 'Số ĐT trên rao vặt/marketplace', query: `${q(phone)} (site:chotot.com OR site:facebook.com)` });
+    }
+    if (username) {
+      dorks.push({ why: 'Username tái sử dụng', query: q(username) });
+      dorks.push({ why: 'Trang profile/forum', query: `${q(username)} (inurl:user OR inurl:profile OR inurl:member)` });
+    }
+    if (org && name) dorks.push({ why: 'Tên + tổ chức', query: `${q(name)} ${q(org)}` });
+    return dorks;
+  },
+
+  /**
+   * Tổng hợp các fact rời rạc thành chuỗi tấn công đa-bước (playbook), chỉ phát ra
+   * chain khi đủ điều kiện tiền đề. Đây là khác biệt chính so với recon tool (chỉ liệt kê).
+   */
+  _buildAttackChains({ f, breachData, footprint, linkage, profile }) {
+    const has = t => Array.isArray(f[t]) && f[t].length > 0;
+    const name = profile.fullName || profile.displayName;
+    const ghFound = footprint && footprint.found && footprint.found.find(x => x.site === 'GitHub');
+    const chains = [];
+
+    if (has('phone_vn') || has('phone_intl')) {
+      chains.push({ name: 'SIM-swap → Account Takeover', severity: 'critical',
+        why: 'Số ĐT công khai' + (has('dob') ? ' + ngày sinh đã lộ' : '') + ' đủ qua KYC nhà mạng',
+        steps: ['Thu thập KYC: tên thật' + (has('dob') ? ' + ngày sinh' : '') + ' để xác minh với nhà mạng',
+          'Social-engineer nhà mạng port số sang SIM/eSIM mới',
+          'Đọc OTP SMS → reset mật khẩu email, ngân hàng, ví điện tử',
+          'Chiếm các tài khoản dùng SMS-2FA'] });
+    }
+    if (has('email') && Array.isArray(breachData) && breachData.length > 0) {
+      chains.push({ name: 'Credential Stuffing', severity: 'high',
+        why: 'Email xuất hiện trong breach → mật khẩu cũ có thể bị tái dùng',
+        steps: ['Lấy mật khẩu rò rỉ của email từ combolist/breach',
+          'Spray mật khẩu lên mọi site phát hiện ở footprint',
+          'Ưu tiên tài khoản chưa bật 2FA', 'Pivot reset email nếu trùng mật khẩu'] });
+    }
+    if (has('email') && has('dob')) {
+      chains.push({ name: 'Account-Recovery Abuse', severity: 'high',
+        why: 'Email + ngày sinh đủ vượt câu hỏi bảo mật (KBA)',
+        steps: ['Trigger "quên mật khẩu" ở dịch vụ mục tiêu',
+          'Trả lời câu hỏi bảo mật bằng ngày sinh/tên đã lộ', 'Reset & chiếm tài khoản'] });
+    }
+    if (name && (has('school_or_work') || has('email'))) {
+      chains.push({ name: 'Spear-Phishing / Pretexting', severity: 'high',
+        why: 'Tên thật + nơi học/làm → kịch bản đáng tin (HR, giảng viên, IT)',
+        steps: ['Giả danh IT/HR/giảng viên của tổ chức đã lộ',
+          'Gửi lure cá nhân hoá theo tên & affiliation',
+          'Dẫn tới trang đăng nhập giả thu thập credential'] });
+    }
+    if (ghFound) {
+      chains.push({ name: 'Source-Code Secret Mining', severity: 'medium',
+        why: 'GitHub công khai thường lộ email phụ & secret trong commit history',
+        steps: ['Clone toàn bộ public repo',
+          'git log --all --format="%ae" → email commit (thường là email thật)',
+          'Chạy gitleaks/trufflehog tìm API key/token commit nhầm',
+          'Pivot email mới sang breach/footprint'] });
+    }
+    if (linkage && linkage.linkagePairs && linkage.linkagePairs.length > 0) {
+      const p = linkage.linkagePairs[0];
+      chains.push({ name: 'Cross-Platform De-anonymization', severity: 'high',
+        why: `Cùng người trên ${p.a.platform} & ${p.b.platform} (confidence ${p.confidence})`,
+        steps: ['Gộp dữ liệu các nền tảng thành 1 hồ sơ',
+          'Đối chiếu ảnh (pHash) xác nhận cùng người',
+          'Dựng timeline & pattern-of-life từ giờ/địa điểm post'] });
+    }
+    if (has('detailed_address') || has('vn_license_plate')) {
+      chains.push({ name: 'Physical Targeting / Stalking', severity: 'high',
+        why: 'Địa chỉ/biển số lộ → định vị thực địa',
+        steps: ['Geocode địa chỉ; tra biển số nếu có',
+          'Suy lịch sinh hoạt từ giờ & vị trí post', 'Theo dõi thực địa / swatting / chặn bưu kiện'] });
+    }
+    if (has('bank_account') || has('credit_card') || has('vn_payment_handle')) {
+      chains.push({ name: 'Financial Fraud', severity: 'critical',
+        why: 'Thông tin tài chính/payment handle lộ',
+        steps: ['Giả danh nạn nhân yêu cầu hoàn tiền/chuyển khoản',
+          'Lừa người liên hệ qua MoMo/ZaloPay', 'Thử thẻ với giao dịch nhỏ'] });
+    }
+    if (has('api_token') || has('password_exposed')) {
+      chains.push({ name: 'Direct Account Takeover', severity: 'critical',
+        why: 'Credential/API key lộ plaintext → dùng trực tiếp',
+        steps: ['Dùng ngay credential/API key đã lộ',
+          'Truy cập repo/cloud/dịch vụ liên quan', 'Lateral movement + lạm dụng hoá đơn cloud'] });
+    }
+
+    const ord = { critical: 0, high: 1, medium: 2, low: 3 };
+    chains.sort((a, b) => ord[a.severity] - ord[b.severity]);
+    return chains;
+  },
+
+  /**
+   * Gợi ý bước recon kế tiếp (pivot) dựa trên fact đã có — tool + command/url sẵn dùng.
+   */
+  _buildNextRecon({ f, profile, footprint }) {
+    const emails = (f.email || []).flatMap(x => x.values || []);
+    const phones = [...(f.phone_vn || []), ...(f.phone_intl || [])].flatMap(x => x.values || []);
+    const username = profile.username;
+    const name = profile.fullName || profile.displayName;
+    const rec = [];
+
+    for (const email of emails.slice(0, 2)) {
+      rec.push({ tool: 'Gravatar', target: email, why: 'Email → ảnh/tên/linked accounts',
+        note: 'GET gravatar.com/{md5(email_lowercased)}.json' });
+      rec.push({ tool: 'holehe', target: email, why: 'Email đăng ký ở >120 site', command: `holehe ${email}` });
+      rec.push({ tool: 'HaveIBeenPwned', target: email, why: 'Breach chi tiết',
+        url: `https://haveibeenpwned.com/account/${encodeURIComponent(email)}` });
+    }
+    for (const phone of phones.slice(0, 1)) {
+      rec.push({ tool: 'Truecaller / GetContact', target: phone, why: 'Tên người lưu số này (manual)' });
+      rec.push({ tool: 'PhoneInfoga', target: phone, why: 'Carrier, vùng, footprint số', command: `phoneinfoga scan -n ${phone}` });
+    }
+    if (username) {
+      rec.push({ tool: 'Maigret', target: username, why: 'Username trên 2500+ site', command: `maigret ${username}` });
+      rec.push({ tool: 'Sherlock', target: username, why: 'Username footprint nhanh', command: `sherlock ${username}` });
+    }
+    if (name) {
+      rec.push({ tool: 'Google Dorks', target: name, why: 'Tìm CV/leak/mention',
+        dorks: this.generateOSINTDorks({ name, email: emails[0], phone: phones[0], username }) });
+    }
+    const gh = footprint && footprint.found && footprint.found.find(x => x.site === 'GitHub');
+    if (gh) rec.push({ tool: 'gitleaks', target: gh.profileUrl, why: 'Secret trong commit history',
+      command: 'gitleaks detect --source <cloned-repo>' });
+    rec.push({ tool: 'Reverse Image (PimEyes/Yandex/Lens)', target: 'profile photo',
+      why: 'Tìm ảnh trùng → tài khoản khác' });
+    return rec;
+  },
+
+  /**
+   * Xuất doxxing report ra Markdown để bỏ vào engagement notes / báo cáo pentest.
+   * @param {Object} r - object trả từ generateDoxxingReport (+ username/platform nếu có)
+   * @returns {string} markdown
+   */
+  exportDoxxingReportMarkdown(r) {
+    if (!r) return '';
+    const L = [];
+    const handle = r.username ? `@${r.username}${r.platform ? ` (${r.platform})` : ''}` : 'target';
+    L.push(`# Doxxing / Exposure Report — ${handle}`);
+    L.push('');
+    L.push(`- **Risk:** ${r.riskScore}/100 (${String(r.riskTier || '').toUpperCase()})`);
+    if (r.generatedAt) L.push(`- **Generated:** ${r.generatedAt}`);
+    L.push('');
+    if (r.narrative) { L.push('## Summary'); L.push(r.narrative.replace(/\*\*/g, '**')); L.push(''); }
+
+    if (r.attackerKnows?.length) {
+      L.push('## Attacker Knows');
+      L.push('| Category | Fact | Source |');
+      L.push('|---|---|---|');
+      for (const k of r.attackerKnows) L.push(`| ${k.category} | ${k.fact.replace(/\|/g, '\\|')} | ${k.source} |`);
+      L.push('');
+    }
+    if (r.attackChains?.length) {
+      L.push('## Attack Chains');
+      for (const c of r.attackChains) {
+        L.push(`### ${c.name} — \`${c.severity}\``);
+        if (c.why) L.push(`*${c.why}*`);
+        c.steps.forEach((s, i) => L.push(`${i + 1}. ${s}`));
+        L.push('');
+      }
+    }
+    if (r.attackerCanDo?.length) {
+      L.push('## Attack Vectors');
+      r.attackerCanDo.forEach(a => L.push(`- ${a}`));
+      L.push('');
+    }
+    if (r.nextRecon?.length) {
+      L.push('## Next Recon (pivots)');
+      for (const n of r.nextRecon) {
+        let line = `- **${n.tool}** — ${n.why}`;
+        if (n.command) line += `\n  - \`${n.command}\``;
+        if (n.url) line += `\n  - ${n.url}`;
+        if (n.note) line += `\n  - ${n.note}`;
+        L.push(line);
+        if (n.dorks) n.dorks.forEach(d => L.push(`  - dork (${d.why}): \`${d.query}\``));
+      }
+      L.push('');
+    }
+    if (r.fixActions?.length) {
+      L.push('## Remediation');
+      for (const fx of r.fixActions) L.push(`- **[${fx.priority}]** ${fx.action}`);
+      L.push('');
+    }
+    return L.join('\n');
   },
 
   // ==================== Doxxing Report Generator ====================
@@ -1770,12 +2046,24 @@ const SocialShieldScanner = {
     const prioOrder = { critical: 0, high: 1, medium: 2, low: 3 };
     fix.sort((a, b) => prioOrder[a.priority] - prioOrder[b.priority]);
 
+    // === Layer 5: Attack chains + next recon pivots (red-team view) ===
+    const ctx = { f: findingByType, breachData, footprint, linkage, profile };
+    const attackChains = this._buildAttackChains(ctx);
+    const nextRecon = this._buildNextRecon(ctx);
+
+    if (attackChains.length > 0 && knows.length > 0) {
+      narrative += ` Có **${attackChains.length}** chuỗi tấn công khả thi` +
+        (attackChains[0] ? `, nghiêm trọng nhất: *${attackChains[0].name}*.` : '.');
+    }
+
     return {
       riskTier,
       riskScore,
       narrative,
       attackerKnows: knows,
       attackerCanDo: [...new Set(canDo)],
+      attackChains,
+      nextRecon,
       fixActions: fix,
       generatedAt: new Date().toISOString(),
     };
